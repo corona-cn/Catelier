@@ -1,4 +1,4 @@
-#include "ElasticArray.hpp"
+#include "ArrayList.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -10,19 +10,19 @@ namespace Catelier::src::foundation {
         constexpr usize DEFAULT_CAPACITY = 4;
     }
 
-    typedef struct ElasticArray {
+    typedef struct ArrayList {
         void** data;
         usize size;
         usize capacity;
-    } ElasticArray;
+    } ArrayList;
 
-    auto ElasticArray_construct(const usize initialCapacity) -> ElasticArray* {
+    auto ArrayList_construct(const usize initialCapacity) -> ArrayList* {
         usize capacity = initialCapacity;
         if (capacity < DEFAULT_CAPACITY) {
             capacity = DEFAULT_CAPACITY;
         }
 
-        auto* const self = (ElasticArray*) malloc(sizeof(ElasticArray));
+        auto* const self = (ArrayList*) malloc(sizeof(ArrayList));
         if (self == nullptr) {
             return nullptr;
         }
@@ -38,7 +38,7 @@ namespace Catelier::src::foundation {
 
         return self;
     }
-    auto ElasticArray_destruct(ElasticArray* self) -> bool {
+    auto ArrayList_destruct(ArrayList* self) -> bool {
         if (!self) {
             return false;
         }
@@ -49,32 +49,32 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto ElasticArray_copy(const ElasticArray* self, const usize inElementSize) -> ElasticArray* {
+    auto ArrayList_copy(const ArrayList* self, const usize inElementSize) -> ArrayList* {
         if (!self || inElementSize == 0) {
             return nullptr;
         }
 
-        auto* const newSelf = ElasticArray_construct(self->capacity);
+        auto* const newSelf = ArrayList_construct(self->capacity);
         if (!newSelf) {
             return nullptr;
         }
 
         for (usize i = 0; i < self->size; ++i) {
             const void* const element = *(self->data + i);
-            if (!ElasticArray_push(newSelf, element, inElementSize)) {
-                ElasticArray_destruct(newSelf);
+            if (!ArrayList_push(newSelf, element, inElementSize)) {
+                ArrayList_destruct(newSelf);
                 return nullptr;
             }
         }
 
         return newSelf;
     }
-    auto ElasticArray_move(ElasticArray* self) -> ElasticArray* {
+    auto ArrayList_move(ArrayList* self) -> ArrayList* {
         if (!self) {
             return nullptr;
         }
 
-        auto* const newSelf = (ElasticArray*) malloc(sizeof(ElasticArray));
+        auto* const newSelf = (ArrayList*) malloc(sizeof(ArrayList));
         if (!newSelf) {
             return nullptr;
         }
@@ -90,14 +90,14 @@ namespace Catelier::src::foundation {
         return newSelf;
     }
 
-    auto ElasticArray_push(ElasticArray* self, const void* inElement, const usize inElementSize) -> bool {
+    auto ArrayList_push(ArrayList* self, const void* inElement, const usize inElementSize) -> bool {
         if (!self || inElementSize == 0) {
             return false;
         }
 
         if (self->size >= self->capacity) {
             const usize newCapacity = self->capacity * 2;
-            if (!ElasticArray_reserve(self, newCapacity)) {
+            if (!ArrayList_reserve(self, newCapacity)) {
                 return false;
             }
         }
@@ -118,14 +118,14 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto ElasticArray_pushMove(ElasticArray* self, void* inElement) -> bool {
+    auto ArrayList_pushMove(ArrayList* self, void* inElement) -> bool {
         if (!self) {
             return false;
         }
 
         if (self->size >= self->capacity) {
             const usize newCapacity = self->capacity * 2;
-            if (!ElasticArray_reserve(self, newCapacity)) {
+            if (!ArrayList_reserve(self, newCapacity)) {
                 return false;
             }
         }
@@ -134,7 +134,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto ElasticArray_insertAt(ElasticArray* self, const usize index, const void* inElement, const usize inElementSize) -> bool {
+    auto ArrayList_insertAt(ArrayList* self, const usize index, const void* inElement, const usize inElementSize) -> bool {
         if (!self || inElementSize == 0) {
             return false;
         }
@@ -145,7 +145,7 @@ namespace Catelier::src::foundation {
 
         if (self->size >= self->capacity) {
             const usize newCapacity = self->capacity * 2;
-            if (!ElasticArray_reserve(self, newCapacity)) {
+            if (!ArrayList_reserve(self, newCapacity)) {
                 return false;
             }
         }
@@ -175,7 +175,7 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto ElasticArray_pop(ElasticArray* self) -> bool {
+    auto ArrayList_pop(ArrayList* self) -> bool {
         if (!self || self->size == 0) {
             return false;
         }
@@ -187,7 +187,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto ElasticArray_removeAt(ElasticArray* self, const usize index) -> bool {
+    auto ArrayList_removeAt(ArrayList* self, const usize index) -> bool {
         if (!self || index >= self->size) {
             return false;
         }
@@ -208,7 +208,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto ElasticArray_clear(ElasticArray* self) -> bool {
+    auto ArrayList_clear(ArrayList* self) -> bool {
         if (!self || self->size == 0) {
             return false;
         }
@@ -224,7 +224,7 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto ElasticArray_reserve(ElasticArray* self, const usize newCapacity) -> bool {
+    auto ArrayList_reserve(ArrayList* self, const usize newCapacity) -> bool {
         if (!self || newCapacity < DEFAULT_CAPACITY) {
             return false;
         }
@@ -243,7 +243,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto ElasticArray_shrinkToFit(ElasticArray* self) -> bool {
+    auto ArrayList_shrinkToFit(ArrayList* self) -> bool {
         if (!self) {
             return false;
         }
@@ -269,7 +269,7 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto ElasticArray_get(const ElasticArray* self, const usize index) -> void* {
+    auto ArrayList_get(const ArrayList* self, const usize index) -> void* {
         if (!self || index >= self->size) {
             return nullptr;
         }
@@ -278,7 +278,7 @@ namespace Catelier::src::foundation {
         return element;
     }
 
-    auto ElasticArray_set(const ElasticArray* self, const usize index, void* inElement) -> bool {
+    auto ArrayList_set(const ArrayList* self, const usize index, void* inElement) -> bool {
         if (!self || index >= self->size) {
             return false;
         }
@@ -288,14 +288,14 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto ElasticArray_size(const ElasticArray* self) -> usize {
+    auto ArrayList_size(const ArrayList* self) -> usize {
         return self ? self->size : 0;
     }
-    auto ElasticArray_capacity(const ElasticArray* self) -> usize {
+    auto ArrayList_capacity(const ArrayList* self) -> usize {
         return self ? self->capacity : 0;
     }
 
-    auto ElasticArray_isEmpty(const ElasticArray* self) -> bool {
+    auto ArrayList_isEmpty(const ArrayList* self) -> bool {
         return self ? self->size == 0 : true;
     }
 }

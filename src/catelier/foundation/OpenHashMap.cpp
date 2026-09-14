@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "ElasticArray.hpp"
+#include "ArrayList.hpp"
 #include "../CommonMacro.hpp"
 
 namespace Catelier::src::foundation {
@@ -26,7 +26,7 @@ namespace Catelier::src::foundation {
     }
 
     typedef struct OpenHashMap {
-        ElasticArray* nodes;
+        ArrayList* nodes;
         usize size;
         usize capacity;
         usize keySize;
@@ -53,7 +53,7 @@ namespace Catelier::src::foundation {
         }
 
         // 构造节点集
-        self->nodes = ElasticArray_construct(capacity);
+        self->nodes = ArrayList_construct(capacity);
         if (!self->nodes) {
             free(self);
             return nullptr;
@@ -61,8 +61,8 @@ namespace Catelier::src::foundation {
 
         // 将节点集填充为 nullptr
         for (usize i = 0; i < capacity; ++i) {
-            if (!ElasticArray_push(self->nodes, nullptr, sizeof(void*))) {
-                ElasticArray_destruct(self->nodes);
+            if (!ArrayList_push(self->nodes, nullptr, sizeof(void*))) {
+                ArrayList_destruct(self->nodes);
 
                 free(self);
 
@@ -87,7 +87,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有节点，释放所有节点的键值，最后释放所有节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* node = (Node*) ElasticArray_get(self->nodes, i);
+            auto* node = (Node*) ArrayList_get(self->nodes, i);
             if (node) {
                 if (node->key) {
                     free(node->key);
@@ -101,7 +101,7 @@ namespace Catelier::src::foundation {
             }
         }
 
-        ElasticArray_destruct(self->nodes);
+        ArrayList_destruct(self->nodes);
 
         free(self);
 
@@ -123,7 +123,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有节点，复制 OCCUPIED 节点
         for (usize i = 0; i < self->capacity; ++i) {
-            const auto* const node = (Node*) ElasticArray_get(self->nodes, i);
+            const auto* const node = (Node*) ArrayList_get(self->nodes, i);
             if (!node || node->state != OCCUPIED) {
                 continue;
             }
@@ -211,7 +211,7 @@ namespace Catelier::src::foundation {
 
         // 线性探测，开放寻址，直到找到空位或匹配键
         while (true) {
-            auto* const node = (Node*) ElasticArray_get(self->nodes, index);
+            auto* const node = (Node*) ArrayList_get(self->nodes, index);
 
             // 如果当前槽位是 nullptr，表示从未使用过，直接分配新节点存入
             if (node == nullptr) {
@@ -241,7 +241,7 @@ namespace Catelier::src::foundation {
                 newNode->state = OCCUPIED;
 
                 // 向节点集写入该节点
-                ElasticArray_set(self->nodes, index, newNode);
+                ArrayList_set(self->nodes, index, newNode);
 
                 // 更新状态
                 self->size++;
@@ -330,7 +330,7 @@ namespace Catelier::src::foundation {
 
         // 线性探测，开放寻址，查找目标节点
         while (true) {
-            auto* const node = (Node*) ElasticArray_get(self->nodes, index);
+            auto* const node = (Node*) ArrayList_get(self->nodes, index);
 
             // 遇到 nullptr，说明从未使用过，无需腾空
             if (node == nullptr) {
@@ -374,7 +374,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有槽位，腾空所有节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* const node = (Node*) ElasticArray_get(self->nodes, i);
+            auto* const node = (Node*) ArrayList_get(self->nodes, i);
 
             // 只处理被占用的节点
             if (node && node->state == OCCUPIED) {
@@ -411,7 +411,7 @@ namespace Catelier::src::foundation {
 
         // 线性探测，开放寻址，查找目标节点
         while (true) {
-            auto* const node = (Node*) ElasticArray_get(self->nodes, index);
+            auto* const node = (Node*) ArrayList_get(self->nodes, index);
 
             // 遇到 nullptr，说明从未使用过，无需擦除
             if (node == nullptr) {
@@ -431,7 +431,7 @@ namespace Catelier::src::foundation {
                 free(node);
 
                 // 将当前节点槽位元素设置为 nullptr，即擦除当前节点
-                ElasticArray_set(self->nodes, index, nullptr);
+                ArrayList_set(self->nodes, index, nullptr);
 
                 // 节点被擦除，节点集大小递减
                 self->size--;
@@ -439,7 +439,7 @@ namespace Catelier::src::foundation {
                 // 继续整理后续节点，修复探测链
                 usize nextIndex = (index + 1) & (self->capacity - 1);
                 while (true) {
-                    auto* const nextNode = (Node*) ElasticArray_get(self->nodes, nextIndex);
+                    auto* const nextNode = (Node*) ArrayList_get(self->nodes, nextIndex);
                     if (nextNode == nullptr || nextNode->state == EMPTY) {
                         break;
                     }
@@ -451,10 +451,10 @@ namespace Catelier::src::foundation {
                     // 说明它被挤到了后面，需要把它移回前面
                     if (originalIndex <= index) {
                         // 将当前索引位元素设为下一节点
-                        ElasticArray_set(self->nodes, index, nextNode);
+                        ArrayList_set(self->nodes, index, nextNode);
 
                         // 将下一索引位元素设为 nullptr
-                        ElasticArray_set(self->nodes, nextIndex, nullptr);
+                        ArrayList_set(self->nodes, nextIndex, nullptr);
 
                         // 索引更新
                         index = nextIndex;
@@ -478,7 +478,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有槽位，擦除所有节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* const node = (Node*) ElasticArray_get(self->nodes, i);
+            auto* const node = (Node*) ArrayList_get(self->nodes, i);
             if (node) {
                 // 释放键内存并置空
                 if (node->key) {
@@ -495,7 +495,7 @@ namespace Catelier::src::foundation {
             }
 
             // 将当前槽位置为 nullptr
-            ElasticArray_set(self->nodes, i, nullptr);
+            ArrayList_set(self->nodes, i, nullptr);
         }
 
         // 更新状态
@@ -517,7 +517,7 @@ namespace Catelier::src::foundation {
 
         // 线性探测，开放寻址，查找目标节点
         while (true) {
-            const auto* const node = (const Node*) ElasticArray_get(self->nodes, index);
+            const auto* const node = (const Node*) ArrayList_get(self->nodes, index);
 
             // 遇到 nullptr，说明从未使用过，可认为不存在
             if (node == nullptr) {
@@ -552,15 +552,15 @@ namespace Catelier::src::foundation {
         }
 
         // 创建新的节点集
-        auto* const newNodes = ElasticArray_construct(capacity);
+        auto* const newNodes = ArrayList_construct(capacity);
         if (!newNodes) {
             return false;
         }
 
         // 填充节点集为 nullptr
         for (usize i = 0; i < capacity; ++i) {
-            if (!ElasticArray_push(newNodes, nullptr, sizeof(void*))) {
-                ElasticArray_destruct(newNodes);
+            if (!ArrayList_push(newNodes, nullptr, sizeof(void*))) {
+                ArrayList_destruct(newNodes);
                 return false;
             }
         }
@@ -576,7 +576,7 @@ namespace Catelier::src::foundation {
 
         // 遍历旧数组，将所有被占用的节点迁移到新数组
         for (usize i = 0; i < oldCapacity; ++i) {
-            auto* const oldNode = (Node*) ElasticArray_get(oldNodes, i);
+            auto* const oldNode = (Node*) ArrayList_get(oldNodes, i);
             if (oldNode && oldNode->state == OCCUPIED) {
                 // 计算哈希值并映射到数组索引范围
                 const usize hash = self->hash(oldNode->key);
@@ -584,10 +584,10 @@ namespace Catelier::src::foundation {
 
                 // 线性探测，开放寻址，寻找空位
                 while (true) {
-                    auto* const node = (Node*) ElasticArray_get(self->nodes, index);
+                    auto* const node = (Node*) ArrayList_get(self->nodes, index);
 
                     if (node == nullptr) {
-                        ElasticArray_set(self->nodes, index, oldNode);
+                        ArrayList_set(self->nodes, index, oldNode);
                         self->size++;
                         break;
                     }
@@ -607,7 +607,7 @@ namespace Catelier::src::foundation {
         }
 
         // 销毁旧数组，其中旧节点集已经迁移
-        ElasticArray_destruct(oldNodes);
+        ArrayList_destruct(oldNodes);
 
         return true;
     }

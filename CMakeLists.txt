@@ -34,9 +34,9 @@ add_executable(Catelier
 	test/Main.cpp
 	src/catelier/CommonMacro.hpp
 	src/catelier/CommonPrimitives.hpp
-	src/catelier/foundation/ElasticArray.hpp
-	src/catelier/foundation/ElasticArray.cpp
-	include/catelier/foundation/ElasticArray.hpp
+	src/catelier/foundation/ArrayList.hpp
+	src/catelier/foundation/ArrayList.cpp
+	include/catelier/foundation/ArrayList.hpp
 	src/catelier/foundation/OpenHashMap.hpp
 	src/catelier/foundation/OpenHashMap.cpp
 	include/catelier/foundation/OpenHashMap.hpp

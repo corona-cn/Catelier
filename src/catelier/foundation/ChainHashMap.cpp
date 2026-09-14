@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "ElasticArray.hpp"
+#include "ArrayList.hpp"
 
 namespace Catelier::src::foundation {
     namespace {
@@ -20,7 +20,7 @@ namespace Catelier::src::foundation {
     }
 
     typedef struct ChainHashMap {
-        ElasticArray* buckets;
+        ArrayList* buckets;
         usize size;
         usize capacity;
         usize keySize;
@@ -47,7 +47,7 @@ namespace Catelier::src::foundation {
         }
 
         // 构造桶数组
-        self->buckets = ElasticArray_construct(capacity);
+        self->buckets = ArrayList_construct(capacity);
         if (!self->buckets) {
             free(self);
             return nullptr;
@@ -55,8 +55,8 @@ namespace Catelier::src::foundation {
 
         // 将桶数组填充为 nullptr，即所有桶都是空链表
         for (usize i = 0; i < capacity; ++i) {
-            if (!ElasticArray_push(self->buckets, nullptr, sizeof(void*))) {
-                ElasticArray_destruct(self->buckets);
+            if (!ArrayList_push(self->buckets, nullptr, sizeof(void*))) {
+                ArrayList_destruct(self->buckets);
 
                 free(self);
 
@@ -81,7 +81,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有桶，释放每个桶的链表节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* currentNode = (Node*) ElasticArray_get(self->buckets, i);
+            auto* currentNode = (Node*) ArrayList_get(self->buckets, i);
             while (currentNode) {
                 auto* const nextNode = currentNode->nextNode;
 
@@ -100,7 +100,7 @@ namespace Catelier::src::foundation {
             }
         }
 
-        ElasticArray_destruct(self->buckets);
+        ArrayList_destruct(self->buckets);
 
         free(self);
 
@@ -122,7 +122,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有桶，复制每个桶的链表节点
         for (usize i = 0; i < self->capacity; ++i) {
-            const auto* currentNode = (const Node*) ElasticArray_get(self->buckets, i);
+            const auto* currentNode = (const Node*) ArrayList_get(self->buckets, i);
             while (currentNode) {
                 // 分配并复制键内存
                 void* const key = malloc(self->keySize);
@@ -205,7 +205,7 @@ namespace Catelier::src::foundation {
         const usize index = hash & (self->capacity - 1);
 
         // 取出该桶的链表头节点
-        auto* currentNode = (Node*) ElasticArray_get(self->buckets, index);
+        auto* currentNode = (Node*) ArrayList_get(self->buckets, index);
 
         // 遍历链表，查找键是否已存在
         while (currentNode) {
@@ -258,10 +258,10 @@ namespace Catelier::src::foundation {
         memcpy(newNode->value, inValue, inValueSize);
 
         // 将新节点指向原头节点
-        newNode->nextNode = (Node*) ElasticArray_get(self->buckets, index);
+        newNode->nextNode = (Node*) ArrayList_get(self->buckets, index);
 
         // 更新桶头节点为新节点
-        ElasticArray_set(self->buckets, index, newNode);
+        ArrayList_set(self->buckets, index, newNode);
 
         // 更新状态
         self->size++;
@@ -281,7 +281,7 @@ namespace Catelier::src::foundation {
         const usize index = hash & (self->capacity - 1);
 
         // 取出该桶的链表头节点
-        auto* currentNode = (Node*) ElasticArray_get(self->buckets, index);
+        auto* currentNode = (Node*) ArrayList_get(self->buckets, index);
         if (currentNode == nullptr) {
             return false;
         }
@@ -289,7 +289,7 @@ namespace Catelier::src::foundation {
         // 目标节点在链表头部
         if (self->keyEquals(currentNode->key, inKey)) {
             // 更新桶头节点为下一节点
-            ElasticArray_set(self->buckets, index, currentNode->nextNode);
+            ArrayList_set(self->buckets, index, currentNode->nextNode);
 
             // 释放头节点键
             if (currentNode->key) {
@@ -351,7 +351,7 @@ namespace Catelier::src::foundation {
 
         // 遍历所有桶，释放每个桶的链表节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* currentNode = (Node*) ElasticArray_get(self->buckets, i);
+            auto* currentNode = (Node*) ArrayList_get(self->buckets, i);
             while (currentNode) {
                 auto* const nextNode = currentNode->nextNode;
 
@@ -372,7 +372,7 @@ namespace Catelier::src::foundation {
             }
 
             // 将当前桶置为空桶空链表
-            ElasticArray_set(self->buckets, i, nullptr);
+            ArrayList_set(self->buckets, i, nullptr);
         }
 
         // 更新状态
@@ -393,7 +393,7 @@ namespace Catelier::src::foundation {
         const usize index = hash & (self->capacity - 1);
 
         // 取出该桶的链表头节点
-        const auto* currentNode = (const Node*) ElasticArray_get(self->buckets, index);
+        const auto* currentNode = (const Node*) ArrayList_get(self->buckets, index);
 
         // 遍历链表查找匹配的键
         while (currentNode) {
@@ -420,15 +420,15 @@ namespace Catelier::src::foundation {
         }
 
         // 创建新的桶集
-        auto* const newBuckets = ElasticArray_construct(capacity);
+        auto* const newBuckets = ArrayList_construct(capacity);
         if (!newBuckets) {
             return false;
         }
 
         // 将桶数组填充为 nullptr，即所有桶都是空桶空链表
         for (usize i = 0; i < capacity; ++i) {
-            if (!ElasticArray_push(newBuckets, nullptr, sizeof(void*))) {
-                ElasticArray_destruct(newBuckets);
+            if (!ArrayList_push(newBuckets, nullptr, sizeof(void*))) {
+                ArrayList_destruct(newBuckets);
                 return false;
             }
         }
@@ -444,7 +444,7 @@ namespace Catelier::src::foundation {
 
         // 遍历旧桶集，将所有节点迁移到新桶集
         for (usize i = 0; i < oldCapacity; ++i) {
-            auto* currentNode = (Node*) ElasticArray_get(oldBuckets, i);
+            auto* currentNode = (Node*) ArrayList_get(oldBuckets, i);
 
             // 遍历当前桶的链表
             while (currentNode) {
@@ -455,10 +455,10 @@ namespace Catelier::src::foundation {
                 const usize index = hash & (self->capacity - 1);
 
                 // 将新节点指向新桶的原头节点
-                currentNode->nextNode = (Node*) ElasticArray_get(self->buckets, index);
+                currentNode->nextNode = (Node*) ArrayList_get(self->buckets, index);
 
                 // 更新新桶头节点为当前节点
-                ElasticArray_set(self->buckets, index, currentNode);
+                ArrayList_set(self->buckets, index, currentNode);
 
                 self->size++;
 
@@ -468,7 +468,7 @@ namespace Catelier::src::foundation {
         }
 
         // 销毁旧桶集，其中旧节点已经迁移
-        ElasticArray_destruct(oldBuckets);
+        ArrayList_destruct(oldBuckets);
 
         return true;
     }
