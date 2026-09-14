@@ -60,6 +60,15 @@ add_executable(Catelier
 	src/catelier/foundation/RingBuffer.hpp
 	src/catelier/foundation/RingBuffer.cpp
 	include/catelier/foundation/RingBuffer.hpp
+	src/catelier/foundation/Stack.hpp
+	src/catelier/foundation/Stack.cpp
+	include/catelier/foundation/Stack.hpp
+	src/catelier/foundation/BoundedQueue.hpp
+	src/catelier/foundation/BoundedQueue.cpp
+	include/catelier/foundation/BoundedQueue.hpp
+	src/catelier/foundation/BoundedDeque.hpp
+	src/catelier/foundation/BoundedDeque.cpp
+	include/catelier/foundation/BoundedDeque.hpp
 )
 
 
