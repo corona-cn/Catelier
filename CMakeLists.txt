@@ -51,6 +51,12 @@ add_executable(Catelier
 	src/catelier/foundation/ChainHashMap.hpp
 	src/catelier/foundation/ChainHashMap.cpp
 	include/catelier/foundation/ChainHashMap.hpp
+	src/catelier/foundation/BitArray.hpp
+	src/catelier/foundation/BitArray.cpp
+	include/catelier/foundation/BitArray.hpp
+	src/catelier/foundation/BitSet.hpp
+	src/catelier/foundation/BitSet.cpp
+	include/catelier/foundation/BitSet.hpp
 )
 
 

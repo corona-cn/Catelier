@@ -34,6 +34,7 @@ namespace Catelier::src::foundation {
     auto SinglyLinkedList_end() -> SinglyLinkedListNode*;
 
     auto SinglyLinkedList_size(const SinglyLinkedList* self) -> usize;
+
     auto SinglyLinkedList_isEmpty(const SinglyLinkedList* self) -> bool;
     auto SinglyLinkedList_contains(const SinglyLinkedList* self, const void* inData, bool (*dataEquals)(const void*, const void*)) -> bool;
 

@@ -121,6 +121,7 @@ namespace Catelier::foundation {
             auto capacity() const -> usize {
                 return this->handle ? src::foundation::ChainHashMap_capacity(this->handle) : 0;
             }
+
             auto isEmpty() const -> bool {
                 return this->handle ? src::foundation::ChainHashMap_isEmpty(this->handle) : true;
             }

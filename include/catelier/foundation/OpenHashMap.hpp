@@ -127,6 +127,7 @@ namespace Catelier::foundation {
             auto capacity() const -> usize {
                 return this->handle ? src::foundation::OpenHashMap_capacity(this->handle) : 0;
             }
+
             auto isEmpty() const -> bool {
                 return this->handle ? src::foundation::OpenHashMap_isEmpty(this->handle) : true;
             }

@@ -104,16 +104,6 @@ namespace Catelier::foundation {
                 return src::foundation::ElasticArray_set(this->handle, index, &value);
             }
 
-            auto size() const -> usize {
-                return this->handle ? src::foundation::ElasticArray_size(this->handle) : 0;
-            }
-            auto capacity() const -> usize {
-                return this->handle ? src::foundation::ElasticArray_capacity(this->handle) : 0;
-            }
-            auto isEmpty() const -> bool {
-                return this->handle ? src::foundation::ElasticArray_isEmpty(this->handle) : true;
-            }
-
             auto begin() -> Type* {
                 return (Type*) src::foundation::ElasticArray_get(this->handle, 0);
             }
@@ -125,6 +115,17 @@ namespace Catelier::foundation {
             }
             auto end() const -> const Type* {
                 return (const Type*) src::foundation::ElasticArray_get(this->handle, size());
+            }
+
+            auto size() const -> usize {
+                return this->handle ? src::foundation::ElasticArray_size(this->handle) : 0;
+            }
+            auto capacity() const -> usize {
+                return this->handle ? src::foundation::ElasticArray_capacity(this->handle) : 0;
+            }
+
+            auto isEmpty() const -> bool {
+                return this->handle ? src::foundation::ElasticArray_isEmpty(this->handle) : true;
             }
 
         private:

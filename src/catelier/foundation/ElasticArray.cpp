@@ -294,6 +294,7 @@ namespace Catelier::src::foundation {
     auto ElasticArray_capacity(const ElasticArray* self) -> usize {
         return self ? self->capacity : 0;
     }
+
     auto ElasticArray_isEmpty(const ElasticArray* self) -> bool {
         return self ? self->size == 0 : true;
     }

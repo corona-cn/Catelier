@@ -624,6 +624,7 @@ namespace Catelier::src::foundation {
     auto OpenHashMap_capacity(const OpenHashMap* self) -> usize {
         return self ? self->capacity : 0;
     }
+
     auto OpenHashMap_isEmpty(const OpenHashMap* self) -> bool {
         return self ? self->size == 0 : true;
     }

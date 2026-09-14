@@ -34,6 +34,7 @@ namespace Catelier::src::foundation {
     auto DoublyLinkedList_end() -> DoublyLinkedListNode*;
 
     auto DoublyLinkedList_size(const DoublyLinkedList* self) -> usize;
+
     auto DoublyLinkedList_isEmpty(const DoublyLinkedList* self) -> bool;
     auto DoublyLinkedList_contains(const DoublyLinkedList* self, const void* inData, bool (*dataEquals)(const void*, const void*)) -> bool;
 

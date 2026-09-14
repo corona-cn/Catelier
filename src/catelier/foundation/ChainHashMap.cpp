@@ -501,6 +501,7 @@ namespace Catelier::src::foundation {
 
         return self->capacity;
     }
+
     auto ChainHashMap_isEmpty(const ChainHashMap* self) -> bool {
         if (!self) {
             return true;

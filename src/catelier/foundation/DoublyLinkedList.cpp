@@ -540,6 +540,7 @@ namespace Catelier::src::foundation {
 
         return self->size;
     }
+
     auto DoublyLinkedList_isEmpty(const DoublyLinkedList* self) -> bool {
         if (!self) {
             return true;

@@ -27,5 +27,6 @@ namespace Catelier::src::foundation {
 
     auto ElasticArray_size(const ElasticArray* self) -> usize;
     auto ElasticArray_capacity(const ElasticArray* self) -> usize;
+
     auto ElasticArray_isEmpty(const ElasticArray* self) -> bool;
 }

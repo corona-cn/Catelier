@@ -510,6 +510,7 @@ namespace Catelier::src::foundation {
 
         return self->size;
     }
+
     auto SinglyLinkedList_isEmpty(const SinglyLinkedList* self) -> bool {
         if (!self) {
             return true;

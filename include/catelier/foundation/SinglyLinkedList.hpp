@@ -198,6 +198,7 @@ namespace Catelier::foundation {
             auto size() const -> usize {
                 return this->handle ? src::foundation::SinglyLinkedList_size(this->handle) : 0;
             }
+
             auto isEmpty() const -> bool {
                 return this->handle ? src::foundation::SinglyLinkedList_isEmpty(this->handle) : true;
             }

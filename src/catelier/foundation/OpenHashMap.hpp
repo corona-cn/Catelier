@@ -25,5 +25,6 @@ namespace Catelier::src::foundation {
     auto OpenHashMap_keySize(const OpenHashMap* self) -> usize;
     auto OpenHashMap_valueSize(const OpenHashMap* self) -> usize;
     auto OpenHashMap_capacity(const OpenHashMap* self) -> usize;
+
     auto OpenHashMap_isEmpty(const OpenHashMap* self) -> bool;
 }

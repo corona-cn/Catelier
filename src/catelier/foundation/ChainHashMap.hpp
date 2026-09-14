@@ -23,5 +23,6 @@ namespace Catelier::src::foundation {
     auto ChainHashMap_keySize(const ChainHashMap* self) -> usize;
     auto ChainHashMap_valueSize(const ChainHashMap* self) -> usize;
     auto ChainHashMap_capacity(const ChainHashMap* self) -> usize;
+
     auto ChainHashMap_isEmpty(const ChainHashMap* self) -> bool;
 }
