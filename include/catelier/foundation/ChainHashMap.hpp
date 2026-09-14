@@ -109,6 +109,9 @@ namespace Catelier::foundation {
                 return src::foundation::ChainHashMap_reserve(this->handle, newCapacity);
             }
 
+            auto capacity() const -> usize {
+                return this->handle ? src::foundation::ChainHashMap_capacity(this->handle) : 0;
+            }
             auto size() const -> usize {
                 return this->handle ? src::foundation::ChainHashMap_size(this->handle) : 0;
             }
@@ -117,9 +120,6 @@ namespace Catelier::foundation {
             }
             auto valueSize() const -> usize {
                 return this->handle ? src::foundation::ChainHashMap_valueSize(this->handle) : 0;
-            }
-            auto capacity() const -> usize {
-                return this->handle ? src::foundation::ChainHashMap_capacity(this->handle) : 0;
             }
 
             auto isEmpty() const -> bool {

@@ -21,8 +21,8 @@ namespace Catelier::src::foundation {
 
     typedef struct ChainHashMap {
         ArrayList* buckets;
-        usize size;
         usize capacity;
+        usize size;
         usize keySize;
         usize valueSize;
         u64 (*hash)(const void*);
@@ -46,8 +46,8 @@ namespace Catelier::src::foundation {
             return nullptr;
         }
 
-        // 构造桶数组
-        self->buckets = ArrayList_construct(capacity);
+        // 构造桶数组，元素是指向链表头节点的指针
+        self->buckets = ArrayList_construct(capacity, sizeof(void*));
         if (!self->buckets) {
             free(self);
             return nullptr;
@@ -55,7 +55,7 @@ namespace Catelier::src::foundation {
 
         // 将桶数组填充为 nullptr，即所有桶都是空链表
         for (usize i = 0; i < capacity; ++i) {
-            if (!ArrayList_push(self->buckets, nullptr, sizeof(void*))) {
+            if (!ArrayList_push(self->buckets, nullptr)) {
                 ArrayList_destruct(self->buckets);
 
                 free(self);
@@ -79,9 +79,12 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续桶指针数组
+        auto** const buckets = (Node**) ArrayList_elements(self->buckets);
+
         // 遍历所有桶，释放每个桶的链表节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* currentNode = (Node*) ArrayList_get(self->buckets, i);
+            auto* currentNode = *(buckets + i);
             while (currentNode) {
                 auto* const nextNode = currentNode->nextNode;
 
@@ -120,9 +123,12 @@ namespace Catelier::src::foundation {
         newSelf->keySize = self->keySize;
         newSelf->valueSize = self->valueSize;
 
+        // 取出连续桶指针数组
+        auto** const buckets = (Node**) ArrayList_elements(self->buckets);
+
         // 遍历所有桶，复制每个桶的链表节点
         for (usize i = 0; i < self->capacity; ++i) {
-            const auto* currentNode = (const Node*) ArrayList_get(self->buckets, i);
+            const auto* currentNode = *(buckets + i);
             while (currentNode) {
                 // 分配并复制键内存
                 void* const key = malloc(self->keySize);
@@ -200,12 +206,15 @@ namespace Catelier::src::foundation {
             }
         }
 
+        // 取出连续桶指针数组
+        auto** const buckets = (Node**) ArrayList_elements(self->buckets);
+
         // 计算哈希值并映射到桶索引范围
         const u64 hash = self->hash(inKey);
         const usize index = hash & (self->capacity - 1);
 
         // 取出该桶的链表头节点
-        auto* currentNode = (Node*) ArrayList_get(self->buckets, index);
+        auto* currentNode = *(buckets + index);
 
         // 遍历链表，查找键是否已存在
         while (currentNode) {
@@ -258,10 +267,10 @@ namespace Catelier::src::foundation {
         memcpy(newNode->value, inValue, inValueSize);
 
         // 将新节点指向原头节点
-        newNode->nextNode = (Node*) ArrayList_get(self->buckets, index);
+        newNode->nextNode = *(buckets + index);
 
         // 更新桶头节点为新节点
-        ArrayList_set(self->buckets, index, newNode);
+        *(buckets + index) = newNode;
 
         // 更新状态
         self->size++;
@@ -276,12 +285,15 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续桶指针数组
+        auto** const buckets = (Node**) ArrayList_elements(self->buckets);
+
         // 计算哈希值并映射到桶索引范围
         const u64 hash = self->hash(inKey);
         const usize index = hash & (self->capacity - 1);
 
         // 取出该桶的链表头节点
-        auto* currentNode = (Node*) ArrayList_get(self->buckets, index);
+        auto* currentNode = *(buckets + index);
         if (currentNode == nullptr) {
             return false;
         }
@@ -289,7 +301,7 @@ namespace Catelier::src::foundation {
         // 目标节点在链表头部
         if (self->keyEquals(currentNode->key, inKey)) {
             // 更新桶头节点为下一节点
-            ArrayList_set(self->buckets, index, currentNode->nextNode);
+            *(buckets + index) = currentNode->nextNode;
 
             // 释放头节点键
             if (currentNode->key) {
@@ -349,9 +361,12 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续桶指针数组
+        auto** const buckets = (Node**) ArrayList_elements(self->buckets);
+
         // 遍历所有桶，释放每个桶的链表节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* currentNode = (Node*) ArrayList_get(self->buckets, i);
+            auto* currentNode = *(buckets + i);
             while (currentNode) {
                 auto* const nextNode = currentNode->nextNode;
 
@@ -372,7 +387,7 @@ namespace Catelier::src::foundation {
             }
 
             // 将当前桶置为空桶空链表
-            ArrayList_set(self->buckets, i, nullptr);
+            *(buckets + i) = nullptr;
         }
 
         // 更新状态
@@ -388,12 +403,15 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续桶指针数组
+        auto** const buckets = (Node**) ArrayList_elements(self->buckets);
+
         // 计算哈希值并映射到桶索引范围
         const u64 hash = self->hash(inKey);
         const usize index = hash & (self->capacity - 1);
 
         // 取出该桶的链表头节点
-        const auto* currentNode = (const Node*) ArrayList_get(self->buckets, index);
+        const auto* currentNode = *(buckets + index);
 
         // 遍历链表查找匹配的键
         while (currentNode) {
@@ -420,31 +438,34 @@ namespace Catelier::src::foundation {
         }
 
         // 创建新的桶集
-        auto* const newBuckets = ArrayList_construct(capacity);
+        auto* const newBuckets = ArrayList_construct(capacity, sizeof(void*));
         if (!newBuckets) {
             return false;
         }
 
         // 将桶数组填充为 nullptr，即所有桶都是空桶空链表
         for (usize i = 0; i < capacity; ++i) {
-            if (!ArrayList_push(newBuckets, nullptr, sizeof(void*))) {
+            if (!ArrayList_push(newBuckets, nullptr)) {
                 ArrayList_destruct(newBuckets);
                 return false;
             }
         }
 
-        // 保存旧的桶集和容量
+        // 保存旧的桶集
         auto* const oldBuckets = self->buckets;
-        const usize oldCapacity = self->capacity;
 
         // 临时切换为新桶集，临时重置元素数量
         self->buckets = newBuckets;
         self->capacity = capacity;
         self->size = 0;
 
-        // 遍历旧桶集，将所有节点迁移到新桶集
-        for (usize i = 0; i < oldCapacity; ++i) {
-            auto* currentNode = (Node*) ArrayList_get(oldBuckets, i);
+        // 取出新旧桶集内部的元素数组
+        auto** const oldElements = (Node**) ArrayList_elements(oldBuckets);
+        auto** const newElements = (Node**) ArrayList_elements(newBuckets);
+
+        // 遍历旧元素数组，将所有节点迁移到新元素数组
+        for (usize i = 0; i < ArrayList_size(oldBuckets); ++i) {
+            auto* currentNode = *(oldElements + i);
 
             // 遍历当前桶的链表
             while (currentNode) {
@@ -455,10 +476,10 @@ namespace Catelier::src::foundation {
                 const usize index = hash & (self->capacity - 1);
 
                 // 将新节点指向新桶的原头节点
-                currentNode->nextNode = (Node*) ArrayList_get(self->buckets, index);
+                currentNode->nextNode = *(newElements + index);
 
                 // 更新新桶头节点为当前节点
-                ArrayList_set(self->buckets, index, currentNode);
+                *(newElements + index) = currentNode;
 
                 self->size++;
 
@@ -473,6 +494,13 @@ namespace Catelier::src::foundation {
         return true;
     }
 
+    auto ChainHashMap_capacity(const ChainHashMap* self) -> usize {
+        if (!self) {
+            return 0;
+        }
+
+        return self->capacity;
+    }
     auto ChainHashMap_size(const ChainHashMap* self) -> usize {
         if (!self) {
             return 0;
@@ -493,13 +521,6 @@ namespace Catelier::src::foundation {
         }
 
         return self->valueSize;
-    }
-    auto ChainHashMap_capacity(const ChainHashMap* self) -> usize {
-        if (!self) {
-            return 0;
-        }
-
-        return self->capacity;
     }
 
     auto ChainHashMap_isEmpty(const ChainHashMap* self) -> bool {

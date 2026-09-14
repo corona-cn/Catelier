@@ -10,36 +10,39 @@ namespace Catelier::src::foundation {
         constexpr usize DEFAULT_CAPACITY = 4;
     }
 
-    // 一个要注意的点
-    // 这个数组列表维护的是一个指针数组，每个指针都指向堆上数据
-    // 所以这个数组列表本质是存储的数据对象本身在内存上不连续
-    // 带来的优势是扩容前后数据指针仍然有效
-    // 带来的劣势是内存的不连续性，不过这也是要在 C 核心层实现通用数据容器的天然代价
+    // 连续字节缓冲区的数组列表
+    // 元素在内存中连续排列，elementSize 是实例级属性，构造时固定
     typedef struct ArrayList {
-        void** data;
-        usize size;
+        u8* elements;
+        usize elementSize;
         usize capacity;
+        usize size;
     } ArrayList;
 
-    auto ArrayList_construct(const usize initialCapacity) -> ArrayList* {
+    auto ArrayList_construct(const usize initialCapacity, const usize inElementSize) -> ArrayList* {
+        if (inElementSize == 0) {
+            return nullptr;
+        }
+
         usize capacity = initialCapacity;
         if (capacity < DEFAULT_CAPACITY) {
             capacity = DEFAULT_CAPACITY;
         }
 
         auto* const self = (ArrayList*) malloc(sizeof(ArrayList));
-        if (self == nullptr) {
+        if (!self) {
             return nullptr;
         }
 
-        self->data = (void**) malloc(sizeof(void*) * capacity);
-        if (!self->data) {
+        self->elements = (u8*) malloc(inElementSize * capacity);
+        if (!self->elements) {
             free(self);
             return nullptr;
         }
 
         self->size = 0;
         self->capacity = capacity;
+        self->elementSize = inElementSize;
 
         return self;
     }
@@ -48,28 +51,25 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        free(self->data);
+        free(self->elements);
         free(self);
 
         return true;
     }
 
-    auto ArrayList_copy(const ArrayList* self, const usize inElementSize) -> ArrayList* {
-        if (!self || inElementSize == 0) {
+    auto ArrayList_copy(const ArrayList* self) -> ArrayList* {
+        if (!self) {
             return nullptr;
         }
 
-        auto* const newSelf = ArrayList_construct(self->capacity);
+        auto* const newSelf = ArrayList_construct(self->capacity, self->elementSize);
         if (!newSelf) {
             return nullptr;
         }
 
-        for (usize i = 0; i < self->size; ++i) {
-            const void* const element = *(self->data + i);
-            if (!ArrayList_push(newSelf, element, inElementSize)) {
-                ArrayList_destruct(newSelf);
-                return nullptr;
-            }
+        if (self->size > 0) {
+            memcpy(newSelf->elements, self->elements, self->elementSize * self->size);
+            newSelf->size = self->size;
         }
 
         return newSelf;
@@ -84,98 +84,86 @@ namespace Catelier::src::foundation {
             return nullptr;
         }
 
-        newSelf->data = self->data;
+        newSelf->elements = self->elements;
         newSelf->size = self->size;
         newSelf->capacity = self->capacity;
+        newSelf->elementSize = self->elementSize;
 
-        self->data = nullptr;
+        self->elements = nullptr;
         self->size = 0;
         self->capacity = 0;
+        self->elementSize = 0;
 
         return newSelf;
     }
 
-    auto ArrayList_push(ArrayList* self, const void* inElement, const usize inElementSize) -> bool {
-        if (!self || inElementSize == 0) {
-            return false;
-        }
-
-        if (self->size >= self->capacity) {
-            const usize newCapacity = self->capacity * 2;
-            if (!ArrayList_reserve(self, newCapacity)) {
-                return false;
-            }
-        }
-
-        if (inElement == nullptr) {
-            *(self->data + self->size++) = nullptr;
-            return true;
-        }
-
-        auto* const element = (void*) malloc(inElementSize);
-        if (!element) {
-            return false;
-        }
-
-        memcpy(element, inElement, inElementSize);
-
-        *(self->data + self->size++) = element;
-
-        return true;
-    }
-    auto ArrayList_pushMove(ArrayList* self, void* inElement) -> bool {
+    auto ArrayList_push(ArrayList* self, const void* inElement) -> bool {
         if (!self) {
             return false;
         }
 
         if (self->size >= self->capacity) {
-            const usize newCapacity = self->capacity * 2;
+            const usize newCapacity = self->capacity == 0 ? DEFAULT_CAPACITY : self->capacity * 2;
             if (!ArrayList_reserve(self, newCapacity)) {
                 return false;
             }
         }
 
-        *(self->data + self->size++) = inElement;
+        if (!inElement) {
+            memset(self->elements + self->size * self->elementSize, 0, self->elementSize);
+        } else {
+            memcpy(self->elements + self->size * self->elementSize, inElement, self->elementSize);
+        }
+
+        self->size++;
 
         return true;
     }
-    auto ArrayList_insertAt(ArrayList* self, const usize index, const void* inElement, const usize inElementSize) -> bool {
-        if (!self || inElementSize == 0) {
-            return false;
+    auto ArrayList_pushSlot(ArrayList* self) -> void* {
+        if (!self) {
+            return nullptr;
         }
 
-        if (index > self->size) {
+        if (self->size >= self->capacity) {
+            const usize newCapacity = self->capacity == 0 ? DEFAULT_CAPACITY : self->capacity * 2;
+            if (!ArrayList_reserve(self, newCapacity)) {
+                return nullptr;
+            }
+        }
+
+        // 返回末尾新可写槽位，用于更底层的控制
+        void* slot = self->elements + self->size * self->elementSize;
+
+        self->size++;
+
+        return slot;
+    }
+    auto ArrayList_insertAt(ArrayList* self, const usize index, const void* inElement) -> bool {
+        if (!self || index > self->size) {
             return false;
         }
 
         if (self->size >= self->capacity) {
-            const usize newCapacity = self->capacity * 2;
+            const usize newCapacity = self->capacity == 0 ? DEFAULT_CAPACITY : self->capacity * 2;
             if (!ArrayList_reserve(self, newCapacity)) {
                 return false;
             }
         }
 
-        if (inElement == nullptr) {
-            *(self->data + index) = nullptr;
-
-            self->size++;
-
-            return true;
+        if (index < self->size) {
+            u8* dst = self->elements + (index + 1) * self->elementSize;
+            const u8* src = self->elements + index * self->elementSize;
+            const usize size = (self->size - index) * self->elementSize;
+            memmove(dst, src, size);
         }
 
-        // 从尾元素开始，逐元素往后移动一位
-        for (usize i = self->size; i > index; --i) {
-            *(self->data + i) = *(self->data + i - 1);
+        if (!inElement) {
+            memset(self->elements + index * self->elementSize, 0, self->elementSize);
+        } else {
+            memcpy(self->elements + index * self->elementSize, inElement, self->elementSize);
         }
 
-        auto* const element = (void*) malloc(inElementSize);
-        if (!element) {
-            return false;
-        }
-
-        memcpy(element, inElement, inElementSize);
-
-        *(self->data + self->size++) = element;
+        self->size++;
 
         return true;
     }
@@ -185,28 +173,30 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        void* const element = *(self->data + self->size - 1);
-        free(element);
-
         self->size--;
 
         return true;
+    }
+    auto ArrayList_popSlot(ArrayList* self) -> void* {
+        if (!self || self->size == 0) {
+            return nullptr;
+        }
+
+        self->size--;
+
+        // 返回末尾旧撤销槽位，用于更底层的控制
+        return self->elements + self->size * self->elementSize;
     }
     auto ArrayList_removeAt(ArrayList* self, const usize index) -> bool {
         if (!self || index >= self->size) {
             return false;
         }
 
-        if (index > self->size) {
-            return false;
-        }
-
-        void* const element = *(self->data + index);
-        free(element);
-
-        // 从 index 位元素开始，逐元素往前移动一位
-        for (usize i = index; i < self->size - 1; ++i) {
-            *(self->data + i) = *(self->data + i + 1);
+        if (index < self->size - 1) {
+            u8* dst = self->elements + index * self->elementSize;
+            const u8* src = self->elements + (index + 1) * self->elementSize;
+            const usize size = (self->size - index - 1) * self->elementSize;
+            memmove(dst, src, size);
         }
 
         self->size--;
@@ -216,12 +206,6 @@ namespace Catelier::src::foundation {
     auto ArrayList_clear(ArrayList* self) -> bool {
         if (!self || self->size == 0) {
             return false;
-        }
-
-        // 遍历释放所有元素的内存
-        for (usize i = 0; i < self->size; ++i) {
-            void* const element = *(self->data + i);
-            free(element);
         }
 
         self->size = 0;
@@ -238,12 +222,12 @@ namespace Catelier::src::foundation {
             return true;
         }
 
-        auto* const newData = (void**) realloc(self->data, sizeof(void*) * newCapacity);
+        auto* const newData = (u8*) realloc(self->elements, self->elementSize * newCapacity);
         if (!newData) {
             return false;
         }
 
-        self->data = newData;
+        self->elements = newData;
         self->capacity = newCapacity;
 
         return true;
@@ -253,10 +237,8 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        // 当 size 为 0，即没有元素时，直接释放 data 的内存并置空，同时重置 capacity
-        // 当前情况被认为 shrinkToFit 生效，返回 true
         if (self->size == 0) {
-            PTR_FREE_AND_NULL(self->data);
+            PTR_FREE_AND_NULL(self->elements);
             self->capacity = 0;
             return true;
         }
@@ -265,9 +247,9 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        auto* const newData = (void**) realloc(self->data, sizeof(void*) * self->size);
+        auto* const newData = (u8*) realloc(self->elements, self->elementSize * self->size);
         if (newData) {
-            self->data = newData;
+            self->elements = newData;
             self->capacity = self->size;
         }
 
@@ -279,25 +261,33 @@ namespace Catelier::src::foundation {
             return nullptr;
         }
 
-        void* const element = *(self->data + index);
-        return element;
+        return self->elements + index * self->elementSize;
     }
-
-    auto ArrayList_set(const ArrayList* self, const usize index, void* inElement) -> bool {
+    auto ArrayList_set(const ArrayList* self, const usize index, const void* inElement) -> bool {
         if (!self || index >= self->size) {
             return false;
         }
 
-        *(self->data + index) = inElement;
+        if (!inElement) {
+            memset(self->elements + index * self->elementSize, 0, self->elementSize);
+        } else {
+            memcpy(self->elements + index * self->elementSize, inElement, self->elementSize);
+        }
 
         return true;
     }
 
-    auto ArrayList_size(const ArrayList* self) -> usize {
-        return self ? self->size : 0;
+    auto ArrayList_elements(const ArrayList* self) -> u8* {
+        return self ? self->elements : nullptr;
+    }
+    auto ArrayList_elementSize(const ArrayList* self) -> usize {
+        return self ? self->elementSize : 0;
     }
     auto ArrayList_capacity(const ArrayList* self) -> usize {
         return self ? self->capacity : 0;
+    }
+    auto ArrayList_size(const ArrayList* self) -> usize {
+        return self ? self->size : 0;
     }
 
     auto ArrayList_isEmpty(const ArrayList* self) -> bool {

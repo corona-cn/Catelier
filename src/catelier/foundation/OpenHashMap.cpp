@@ -27,8 +27,8 @@ namespace Catelier::src::foundation {
 
     typedef struct OpenHashMap {
         ArrayList* nodes;
-        usize size;
         usize capacity;
+        usize size;
         usize keySize;
         usize valueSize;
         u64 (*hash)(const void*);
@@ -52,16 +52,16 @@ namespace Catelier::src::foundation {
             return nullptr;
         }
 
-        // 构造节点集
-        self->nodes = ArrayList_construct(capacity);
+        // 构造节点集，元素是指向 Node 的指针
+        self->nodes = ArrayList_construct(capacity, sizeof(void*));
         if (!self->nodes) {
             free(self);
             return nullptr;
         }
 
-        // 将节点集填充为 nullptr
+        // 将节点集填充为 nullptr，表示空槽位
         for (usize i = 0; i < capacity; ++i) {
-            if (!ArrayList_push(self->nodes, nullptr, sizeof(void*))) {
+            if (!ArrayList_push(self->nodes, nullptr)) {
                 ArrayList_destruct(self->nodes);
 
                 free(self);
@@ -85,9 +85,12 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 遍历所有节点，释放所有节点的键值，最后释放所有节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* node = (Node*) ArrayList_get(self->nodes, i);
+            auto* const node = *(nodes + i);
             if (node) {
                 if (node->key) {
                     free(node->key);
@@ -121,9 +124,12 @@ namespace Catelier::src::foundation {
         newSelf->keySize = self->keySize;
         newSelf->valueSize = self->valueSize;
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 遍历所有节点，复制 OCCUPIED 节点
         for (usize i = 0; i < self->capacity; ++i) {
-            const auto* const node = (Node*) ArrayList_get(self->nodes, i);
+            const auto* const node = *(nodes + i);
             if (!node || node->state != OCCUPIED) {
                 continue;
             }
@@ -205,13 +211,16 @@ namespace Catelier::src::foundation {
             }
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 计算哈希值并映射到数组索引范围
         const usize hash = self->hash(inKey);
         usize index = hash & (self->capacity - 1);
 
         // 线性探测，开放寻址，直到找到空位或匹配键
         while (true) {
-            auto* const node = (Node*) ArrayList_get(self->nodes, index);
+            auto* const node = *(nodes + index);
 
             // 如果当前槽位是 nullptr，表示从未使用过，直接分配新节点存入
             if (node == nullptr) {
@@ -241,7 +250,7 @@ namespace Catelier::src::foundation {
                 newNode->state = OCCUPIED;
 
                 // 向节点集写入该节点
-                ArrayList_set(self->nodes, index, newNode);
+                *(nodes + index) = newNode;
 
                 // 更新状态
                 self->size++;
@@ -324,13 +333,16 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 计算哈希值并映射到数组索引范围
         const usize hash = self->hash(inKey);
         usize index = hash & (self->capacity - 1);
 
         // 线性探测，开放寻址，查找目标节点
         while (true) {
-            auto* const node = (Node*) ArrayList_get(self->nodes, index);
+            auto* const node = *(nodes + index);
 
             // 遇到 nullptr，说明从未使用过，无需腾空
             if (node == nullptr) {
@@ -372,9 +384,12 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 遍历所有槽位，腾空所有节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* const node = (Node*) ArrayList_get(self->nodes, i);
+            auto* const node = *(nodes + i);
 
             // 只处理被占用的节点
             if (node && node->state == OCCUPIED) {
@@ -405,13 +420,16 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 计算哈希值并映射到数组索引范围
         const usize hash = self->hash(inKey);
         usize index = hash & (self->capacity - 1);
 
         // 线性探测，开放寻址，查找目标节点
         while (true) {
-            auto* const node = (Node*) ArrayList_get(self->nodes, index);
+            auto* const node = *(nodes + index);
 
             // 遇到 nullptr，说明从未使用过，无需擦除
             if (node == nullptr) {
@@ -431,7 +449,7 @@ namespace Catelier::src::foundation {
                 free(node);
 
                 // 将当前节点槽位元素设置为 nullptr，即擦除当前节点
-                ArrayList_set(self->nodes, index, nullptr);
+                *(nodes + index) = nullptr;
 
                 // 节点被擦除，节点集大小递减
                 self->size--;
@@ -439,7 +457,7 @@ namespace Catelier::src::foundation {
                 // 继续整理后续节点，修复探测链
                 usize nextIndex = (index + 1) & (self->capacity - 1);
                 while (true) {
-                    auto* const nextNode = (Node*) ArrayList_get(self->nodes, nextIndex);
+                    auto* const nextNode = *(nodes + nextIndex);
                     if (nextNode == nullptr || nextNode->state == EMPTY) {
                         break;
                     }
@@ -451,10 +469,10 @@ namespace Catelier::src::foundation {
                     // 说明它被挤到了后面，需要把它移回前面
                     if (originalIndex <= index) {
                         // 将当前索引位元素设为下一节点
-                        ArrayList_set(self->nodes, index, nextNode);
+                        *(nodes + index) = nextNode;
 
                         // 将下一索引位元素设为 nullptr
-                        ArrayList_set(self->nodes, nextIndex, nullptr);
+                        *(nodes + nextIndex) = nullptr;
 
                         // 索引更新
                         index = nextIndex;
@@ -476,9 +494,12 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 遍历所有槽位，擦除所有节点
         for (usize i = 0; i < self->capacity; ++i) {
-            auto* const node = (Node*) ArrayList_get(self->nodes, i);
+            auto* const node = *(nodes + i);
             if (node) {
                 // 释放键内存并置空
                 if (node->key) {
@@ -495,7 +516,7 @@ namespace Catelier::src::foundation {
             }
 
             // 将当前槽位置为 nullptr
-            ArrayList_set(self->nodes, i, nullptr);
+            *(nodes + i) = nullptr;
         }
 
         // 更新状态
@@ -511,13 +532,16 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        // 取出连续节点指针数组
+        auto** const nodes = (Node**) ArrayList_elements(self->nodes);
+
         // 计算哈希值并映射到数组索引范围
         const usize hash = self->hash(inKey);
         usize index = hash & (self->capacity - 1);
 
         // 线性探测，开放寻址，查找目标节点
         while (true) {
-            const auto* const node = (const Node*) ArrayList_get(self->nodes, index);
+            const auto* const node = *(nodes + index);
 
             // 遇到 nullptr，说明从未使用过，可认为不存在
             if (node == nullptr) {
@@ -552,66 +576,74 @@ namespace Catelier::src::foundation {
         }
 
         // 创建新的节点集
-        auto* const newNodes = ArrayList_construct(capacity);
+        auto* const newNodes = ArrayList_construct(capacity, sizeof(void*));
         if (!newNodes) {
             return false;
         }
 
-        // 填充节点集为 nullptr
+        // 将节点集填充为 nullptr，表示空槽位
         for (usize i = 0; i < capacity; ++i) {
-            if (!ArrayList_push(newNodes, nullptr, sizeof(void*))) {
+            if (!ArrayList_push(newNodes, nullptr)) {
                 ArrayList_destruct(newNodes);
                 return false;
             }
         }
 
-        // 保存旧的节点集和容量
+        // 保存旧的节点集
         auto* const oldNodes = self->nodes;
-        const usize oldCapacity = self->capacity;
 
-        // 临时切换为新数组，临时重置节点集大小
+        // 临时切换为新节点集，并临时重置元素数量
         self->nodes = newNodes;
         self->capacity = capacity;
         self->size = 0;
 
-        // 遍历旧数组，将所有被占用的节点迁移到新数组
-        for (usize i = 0; i < oldCapacity; ++i) {
-            auto* const oldNode = (Node*) ArrayList_get(oldNodes, i);
-            if (oldNode && oldNode->state == OCCUPIED) {
-                // 计算哈希值并映射到数组索引范围
-                const usize hash = self->hash(oldNode->key);
-                usize index = hash & (self->capacity - 1);
+        // 取出新旧节点集内部的元素数组
+        auto** const oldElements = (Node**) ArrayList_elements(oldNodes);
+        auto** const newElements = (Node**) ArrayList_elements(newNodes);
 
-                // 线性探测，开放寻址，寻找空位
-                while (true) {
-                    auto* const node = (Node*) ArrayList_get(self->nodes, index);
+        // 遍历旧元素数组，将所有被占用的节点迁移到新元素数组
+        for (usize i = 0; i < ArrayList_size(oldNodes); ++i) {
+            auto* const oldNode = *(oldElements + i);
+            if (!oldNode || oldNode->state != OCCUPIED) {
+                continue;
+            }
 
-                    if (node == nullptr) {
-                        ArrayList_set(self->nodes, index, oldNode);
-                        self->size++;
-                        break;
-                    }
+            // 计算哈希值并映射到新数组索引范围
+            const usize hash = self->hash(oldNode->key);
+            usize index = hash & (self->capacity - 1);
 
-                    if (node->state == EMPTY) {
-                        node->key = oldNode->key;
-                        node->value = oldNode->value;
-                        node->state = OCCUPIED;
-                        self->size++;
-                        break;
-                    }
+            // 线性探测，开放寻址，寻找空位
+            while (true) {
+                auto* const node = *(newElements + index);
 
-                    // 继续探测
-                    index = (index + 1) & (self->capacity - 1);
+                if (node == nullptr) {
+                    *(newElements + index) = oldNode;
+                    self->size++;
+                    break;
                 }
+
+                if (node->state == EMPTY) {
+                    node->key = oldNode->key;
+                    node->value = oldNode->value;
+                    node->state = OCCUPIED;
+                    self->size++;
+                    break;
+                }
+
+                // 继续探测
+                index = (index + 1) & (self->capacity - 1);
             }
         }
 
-        // 销毁旧数组，其中旧节点集已经迁移
+        // 销毁旧节点集，其中旧节点已经迁移
         ArrayList_destruct(oldNodes);
 
         return true;
     }
 
+    auto OpenHashMap_capacity(const OpenHashMap* self) -> usize {
+        return self ? self->capacity : 0;
+    }
     auto OpenHashMap_size(const OpenHashMap* self) -> usize {
         return self ? self->size : 0;
     }
@@ -620,9 +652,6 @@ namespace Catelier::src::foundation {
     }
     auto OpenHashMap_valueSize(const OpenHashMap* self) -> usize {
         return self ? self->valueSize : 0;
-    }
-    auto OpenHashMap_capacity(const OpenHashMap* self) -> usize {
-        return self ? self->capacity : 0;
     }
 
     auto OpenHashMap_isEmpty(const OpenHashMap* self) -> bool {

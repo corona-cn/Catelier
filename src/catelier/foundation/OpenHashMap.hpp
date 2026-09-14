@@ -21,10 +21,10 @@ namespace Catelier::src::foundation {
 
     auto OpenHashMap_reserve(OpenHashMap* self, usize newCapacity) -> bool;
 
+    auto OpenHashMap_capacity(const OpenHashMap* self) -> usize;
     auto OpenHashMap_size(const OpenHashMap* self) -> usize;
     auto OpenHashMap_keySize(const OpenHashMap* self) -> usize;
     auto OpenHashMap_valueSize(const OpenHashMap* self) -> usize;
-    auto OpenHashMap_capacity(const OpenHashMap* self) -> usize;
 
     auto OpenHashMap_isEmpty(const OpenHashMap* self) -> bool;
 }

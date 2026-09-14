@@ -1,5 +1,6 @@
 #pragma once
-#include <algorithm>
+#include <new>
+#include <utility>
 
 #include "../../../src/catelier/foundation/ArrayList.hpp"
 
@@ -7,58 +8,18 @@ namespace Catelier::foundation {
     template<typename Type>
     class ArrayList {
         public:
-            class Iterator {
-                public:
-                    explicit Iterator(src::foundation::ArrayList* handle, const usize index) {
-                        this->handle = handle;
-                        this->index = index;
-                    }
-
-                    auto operator * () -> Type& {
-                        return *((Type*) src::foundation::ArrayList_get(this->handle, this->index));
-                    }
-                    auto operator ++ () -> Iterator& {
-                        ++this->index;
-                        return *this;
-                    }
-                    auto operator != (const Iterator& other) const -> bool {
-                        return this->index != other.index;
-                    }
-
-                private:
-                    src::foundation::ArrayList* handle;
-                    usize index;
-            };
-
-            class ConstIterator {
-                public:
-                    explicit ConstIterator(const src::foundation::ArrayList* handle, const usize index) {
-                        this->handle = handle;
-                        this->index = index;
-                    }
-
-                    auto operator * () const -> const Type& {
-                        return *((const Type*) src::foundation::ArrayList_get(this->handle, this->index));
-                    }
-                    auto operator ++ () -> ConstIterator& {
-                        ++this->index;
-                        return *this;
-                    }
-                    auto operator != (const ConstIterator& other) const -> bool {
-                        return this->index != other.index;
-                    }
-
-                private:
-                    const src::foundation::ArrayList* handle;
-                    usize index;
-            };
-
             explicit ArrayList(const usize initialCapacity = 4) {
-                this->handle = src::foundation::ArrayList_construct(initialCapacity);
+                this->handle = src::foundation::ArrayList_construct(initialCapacity, sizeof(Type));
             }
             ~ArrayList() {
                 if (this->handle) {
+                    Type* const element = (Type*) src::foundation::ArrayList_elements(this->handle);
+                    for (usize i = 0; i < src::foundation::ArrayList_size(this->handle); ++i) {
+                        element[i].~Type();
+                    }
+
                     src::foundation::ArrayList_destruct(this->handle);
+
                     this->handle = nullptr;
                 }
             }
@@ -69,20 +30,33 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::ArrayList_copy(other.handle, sizeof(Type));
+                this->handle = src::foundation::ArrayList_construct(other.size(), sizeof(Type));
+                if (!this->handle) {
+                    return;
+                }
+
+                for (usize i = 0; i < other.size(); ++i) {
+                    void* const slot = src::foundation::ArrayList_pushSlot(this->handle);
+                    new(slot) Type(other[i]);
+                }
             }
             ArrayList(ArrayList&& other) noexcept {
                 this->handle = src::foundation::ArrayList_move(other.handle);
             }
             ArrayList& operator = (const ArrayList& other) {
                 if (this != &other) {
-                    if (this->handle) {
-                        src::foundation::ArrayList_destruct(this->handle);
-                        this->handle = nullptr;
+                    this->clear();
+
+                    if (!this->handle) {
+                        this->handle = src::foundation::ArrayList_construct(other.size(), sizeof(Type));
+                        if (!this->handle) {
+                            return *this;
+                        }
                     }
 
-                    if (other.handle) {
-                        this->handle = src::foundation::ArrayList_copy(other.handle, sizeof(Type));
+                    for (usize i = 0; i < other.size(); ++i) {
+                        void* const slot = src::foundation::ArrayList_pushSlot(this->handle);
+                        new(slot) Type(other[i]);
                     }
                 }
 
@@ -91,6 +65,11 @@ namespace Catelier::foundation {
             ArrayList& operator = (ArrayList&& other) noexcept {
                 if (this != &other) {
                     if (this->handle) {
+                        Type* const element = (Type*) src::foundation::ArrayList_elements(this->handle);
+                        for (usize i = 0; i < src::foundation::ArrayList_size(this->handle); ++i) {
+                            (*(element + i)).~Type();
+                        }
+
                         src::foundation::ArrayList_destruct(this->handle);
                     }
 
@@ -101,36 +80,104 @@ namespace Catelier::foundation {
             }
 
             auto push(const Type& value) -> bool {
-                return src::foundation::ArrayList_push(this->handle, &value, sizeof(Type));
-            }
-            auto push(Type&& value) -> bool {
-                Type* movedValue = new Type(std::move(value));
-                if (!src::foundation::ArrayList_pushMove(this->handle, movedValue)) {
-                    delete movedValue;
+                if (!this->handle) {
                     return false;
                 }
+
+                void* const slot = src::foundation::ArrayList_pushSlot(this->handle);
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(value);
+
+                return true;
+            }
+            auto push(Type&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::ArrayList_pushSlot(this->handle);
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(std::move(value));
 
                 return true;
             }
             auto insertAt(const usize index, const Type& value) -> bool {
-                return src::foundation::ArrayList_insertAt(this->handle, index, &value, sizeof(Type));
+                if (!this->handle || index > this->size()) {
+                    return false;
+                }
+
+                if (index == this->size()) {
+                    return this->push(value);
+                }
+
+                void* const slot = src::foundation::ArrayList_pushSlot(this->handle);
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(std::move((*this)[this->size() - 2]));
+
+                // 将 index 之后的元素逐个右移一格
+                for (usize i = this->size() - 2; i > index; --i) {
+                    (*this)[i] = std::move((*this)[i - 1]);
+                }
+
+                // 在 index 处写入新元素
+                (*this)[index] = value;
+
+                return true;
             }
 
             auto pop() -> bool {
-                return src::foundation::ArrayList_pop(this->handle);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::ArrayList_popSlot(this->handle);
+                if (!slot) {
+                    return false;
+                }
+
+                ((Type*) slot)->~Type();
+
+                return true;
             }
             auto removeAt(const usize index) -> bool {
-                return src::foundation::ArrayList_removeAt(this->handle, index);
+                if (!this->handle || index >= this->size()) {
+                    return false;
+                }
+
+                // 将 index 之后的元素逐个左移一格
+                for (usize i = index; i < this->size() - 1; ++i) {
+                    (*this)[i] = std::move((*this)[i + 1]);
+                }
+
+                return this->pop();
             }
             auto clear() -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                Type* const element = (Type*) src::foundation::ArrayList_elements(this->handle);
+                for (usize i = 0; i < src::foundation::ArrayList_size(this->handle); ++i) {
+                    (*(element + i)).~Type();
+                }
+
                 return src::foundation::ArrayList_clear(this->handle);
             }
 
             auto reserve(const usize newCapacity) -> bool {
-                return src::foundation::ArrayList_reserve(this->handle, newCapacity);
+                return this->handle ? src::foundation::ArrayList_reserve(this->handle, newCapacity) : false;
             }
             auto shrinkToFit() -> bool {
-                return src::foundation::ArrayList_shrinkToFit(this->handle);
+                return this->handle ? src::foundation::ArrayList_shrinkToFit(this->handle) : false;
             }
 
             auto get(const usize index) -> Type& {
@@ -147,27 +194,33 @@ namespace Catelier::foundation {
             }
 
             auto set(const usize index, const Type& value) -> bool {
-                return src::foundation::ArrayList_set(this->handle, index, &value);
+                if (!this->handle || index >= this->size()) {
+                    return false;
+                }
+
+                (*this)[index] = value;
+
+                return true;
             }
 
-            auto begin() -> Iterator {
-                return Iterator(this->handle, 0);
+            auto begin() -> Type* {
+                return (Type*) src::foundation::ArrayList_elements(this->handle);
             }
-            auto begin() const -> ConstIterator {
-                return ConstIterator(this->handle, 0);
+            auto begin() const -> const Type* {
+                return (const Type*) src::foundation::ArrayList_elements(this->handle);
             }
-            auto end() -> Iterator {
-                return Iterator(this->handle, this->size());
+            auto end() -> Type* {
+                return this->begin() + this->size();
             }
-            auto end() const -> ConstIterator {
-                return ConstIterator(this->handle, this->size());
+            auto end() const -> const Type* {
+                return this->begin() + this->size();
             }
 
-            auto size() const -> usize {
-                return this->handle ? src::foundation::ArrayList_size(this->handle) : 0;
-            }
             auto capacity() const -> usize {
                 return this->handle ? src::foundation::ArrayList_capacity(this->handle) : 0;
+            }
+            auto size() const -> usize {
+                return this->handle ? src::foundation::ArrayList_size(this->handle) : 0;
             }
 
             auto isEmpty() const -> bool {
@@ -175,6 +228,6 @@ namespace Catelier::foundation {
             }
 
         private:
-            src::foundation::ArrayList* handle;
+            src::foundation::ArrayList* handle = nullptr;
     };
 }
