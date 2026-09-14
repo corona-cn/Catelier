@@ -10,6 +10,11 @@ namespace Catelier::src::foundation {
         constexpr usize DEFAULT_CAPACITY = 4;
     }
 
+    // 一个要注意的点
+    // 这个数组列表维护的是一个指针数组，每个指针都指向堆上数据
+    // 所以这个数组列表本质是存储的数据对象本身在内存上不连续
+    // 带来的优势是扩容前后数据指针仍然有效
+    // 带来的劣势是内存的不连续性，不过这也是要在 C 核心层实现通用数据容器的天然代价
     typedef struct ArrayList {
         void** data;
         usize size;
