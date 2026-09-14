@@ -7,6 +7,52 @@ namespace Catelier::foundation {
     template<typename Type>
     class ArrayList {
         public:
+            class Iterator {
+                public:
+                    explicit Iterator(src::foundation::ArrayList* handle, const usize index) {
+                        this->handle = handle;
+                        this->index = index;
+                    }
+
+                    auto operator * () -> Type& {
+                        return *((Type*) src::foundation::ArrayList_get(this->handle, this->index));
+                    }
+                    auto operator ++ () -> Iterator& {
+                        ++this->index;
+                        return *this;
+                    }
+                    auto operator != (const Iterator& other) const -> bool {
+                        return this->index != other.index;
+                    }
+
+                private:
+                    src::foundation::ArrayList* handle;
+                    usize index;
+            };
+
+            class ConstIterator {
+                public:
+                    explicit ConstIterator(const src::foundation::ArrayList* handle, const usize index) {
+                        this->handle = handle;
+                        this->index = index;
+                    }
+
+                    auto operator * () const -> const Type& {
+                        return *((const Type*) src::foundation::ArrayList_get(this->handle, this->index));
+                    }
+                    auto operator ++ () -> ConstIterator& {
+                        ++this->index;
+                        return *this;
+                    }
+                    auto operator != (const ConstIterator& other) const -> bool {
+                        return this->index != other.index;
+                    }
+
+                private:
+                    const src::foundation::ArrayList* handle;
+                    usize index;
+            };
+
             explicit ArrayList(const usize initialCapacity = 4) {
                 this->handle = src::foundation::ArrayList_construct(initialCapacity);
             }
@@ -104,17 +150,17 @@ namespace Catelier::foundation {
                 return src::foundation::ArrayList_set(this->handle, index, &value);
             }
 
-            auto begin() -> Type* {
-                return (Type*) src::foundation::ArrayList_get(this->handle, 0);
+            auto begin() -> Iterator {
+                return Iterator(this->handle, 0);
             }
-            auto begin() const -> const Type* {
-                return (const Type*) src::foundation::ArrayList_get(this->handle, 0);
+            auto begin() const -> ConstIterator {
+                return ConstIterator(this->handle, 0);
             }
-            auto end() -> Type* {
-                return (Type*) src::foundation::ArrayList_get(this->handle, size());
+            auto end() -> Iterator {
+                return Iterator(this->handle, this->size());
             }
-            auto end() const -> const Type* {
-                return (const Type*) src::foundation::ArrayList_get(this->handle, size());
+            auto end() const -> ConstIterator {
+                return ConstIterator(this->handle, this->size());
             }
 
             auto size() const -> usize {
