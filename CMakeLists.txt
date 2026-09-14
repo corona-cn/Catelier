@@ -57,6 +57,9 @@ add_executable(Catelier
 	src/catelier/foundation/BitSet.hpp
 	src/catelier/foundation/BitSet.cpp
 	include/catelier/foundation/BitSet.hpp
+	src/catelier/foundation/RingBuffer.hpp
+	src/catelier/foundation/RingBuffer.cpp
+	include/catelier/foundation/RingBuffer.hpp
 )
 
 
