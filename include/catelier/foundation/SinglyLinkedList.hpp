@@ -16,16 +16,29 @@ namespace Catelier::foundation {
         public:
             class Iterator {
                 public:
-                    explicit Iterator(src::foundation::SinglyLinkedListNode* node) {
+                    explicit Iterator(src::foundation::SinglyLinkedListNode* node = nullptr) {
                         this->node = node;
                     }
 
                     auto operator * () -> Type& {
                         return *((Type*) src::foundation::SinglyLinkedListNode_data(this->node));
                     }
+                    auto operator -> () -> Type* {
+                        return (Type*) src::foundation::SinglyLinkedListNode_data(this->node);
+                    }
+
                     auto operator ++ () -> Iterator& {
                         this->node = src::foundation::SinglyLinkedListNode_next(this->node);
                         return *this;
+                    }
+                    auto operator ++ (int) -> Iterator {
+                        Iterator temp = *this;
+                        this->node = src::foundation::SinglyLinkedListNode_next(this->node);
+                        return temp;
+                    }
+
+                    auto operator == (const Iterator& other) const -> bool {
+                        return this->node == other.node;
                     }
                     auto operator != (const Iterator& other) const -> bool {
                         return this->node != other.node;
@@ -37,16 +50,29 @@ namespace Catelier::foundation {
 
             class ConstIterator {
                 public:
-                    explicit ConstIterator(const src::foundation::SinglyLinkedListNode* node) {
+                    explicit ConstIterator(const src::foundation::SinglyLinkedListNode* node = nullptr) {
                         this->node = node;
                     }
 
                     auto operator * () const -> const Type& {
                         return *((const Type*) src::foundation::SinglyLinkedListNode_data(this->node));
                     }
+                    auto operator -> () const -> const Type* {
+                        return (const Type*) src::foundation::SinglyLinkedListNode_data(this->node);
+                    }
+
                     auto operator ++ () -> ConstIterator& {
                         this->node = src::foundation::SinglyLinkedListNode_next(this->node);
                         return *this;
+                    }
+                    auto operator ++ (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        this->node = src::foundation::SinglyLinkedListNode_next(this->node);
+                        return temp;
+                    }
+
+                    auto operator == (const ConstIterator& other) const -> bool {
+                        return this->node == other.node;
                     }
                     auto operator != (const ConstIterator& other) const -> bool {
                         return this->node != other.node;

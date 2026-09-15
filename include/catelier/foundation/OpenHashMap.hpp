@@ -19,6 +19,180 @@ namespace Catelier::foundation {
     template<typename Key, typename Value>
     class OpenHashMap {
         public:
+            class Iterator {
+                public:
+                    explicit Iterator(src::foundation::OpenHashMap* handle = nullptr, const usize fromIndex = 0) {
+                        this->handle = handle;
+                        this->keyPtr = nullptr;
+                        this->valuePtr = nullptr;
+                        this->index = fromIndex;
+
+                        if (!this->handle) {
+                            return;
+                        }
+
+                        if (fromIndex >= src::foundation::OpenHashMap_capacity(this->handle)) {
+                            return;
+                        }
+
+                        usize nextIndex = 0;
+                        if (!src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, fromIndex, &this->keyPtr, &this->valuePtr, &nextIndex)) {
+                            this->index = src::foundation::OpenHashMap_capacity(this->handle);
+                            return;
+                        }
+
+                        this->index = nextIndex;
+                    }
+
+                    auto key() -> Key& {
+                        return *((Key*) this->keyPtr);
+                    }
+                    auto value() -> Value& {
+                        return *((Value*) this->valuePtr);
+                    }
+
+                    auto operator * () -> Value& {
+                        return *((Value*) this->valuePtr);
+                    }
+                    auto operator -> () -> Value* {
+                        return (Value*) this->valuePtr;
+                    }
+
+                    auto operator ++ () -> Iterator& {
+                        if (!this->handle) {
+                            return *this;
+                        }
+
+                        const usize capacity = src::foundation::OpenHashMap_capacity(this->handle);
+                        if (this->index + 1 >= capacity) {
+                            this->index = capacity;
+                            this->keyPtr = nullptr;
+                            this->valuePtr = nullptr;
+
+                            return *this;
+                        }
+
+                        usize nextIndex = 0;
+                        if (!src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, this->index + 1, &this->keyPtr, &this->valuePtr, &nextIndex)) {
+                            this->index = capacity;
+                            this->keyPtr = nullptr;
+                            this->valuePtr = nullptr;
+
+                            return *this;
+                        }
+
+                        this->index = nextIndex;
+
+                        return *this;
+                    }
+                    auto operator ++ (int) -> Iterator {
+                        Iterator temp = *this;
+                        ++(*this);
+
+                        return temp;
+                    }
+
+                    auto operator == (const Iterator& other) const -> bool {
+                        return this->handle == other.handle && this->index == other.index;
+                    }
+                    auto operator != (const Iterator& other) const -> bool {
+                        return this->handle != other.handle || this->index != other.index;
+                    }
+
+                private:
+                    src::foundation::OpenHashMap* handle;
+                    usize index;
+                    void* keyPtr;
+                    void* valuePtr;
+            };
+
+            class ConstIterator {
+                public:
+                    explicit ConstIterator(const src::foundation::OpenHashMap* handle = nullptr, const usize fromIndex = 0) {
+                        this->handle = handle;
+                        this->keyPtr = nullptr;
+                        this->valuePtr = nullptr;
+                        this->index = fromIndex;
+
+                        if (!this->handle) {
+                            return;
+                        }
+
+                        if (fromIndex >= src::foundation::OpenHashMap_capacity(this->handle)) {
+                            return;
+                        }
+
+                        usize nextIndex = 0;
+                        if (!src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, fromIndex, &this->keyPtr, &this->valuePtr, &nextIndex)) {
+                            this->index = src::foundation::OpenHashMap_capacity(this->handle);
+                            return;
+                        }
+
+                        this->index = nextIndex;
+                    }
+
+                    auto key() const -> const Key& {
+                        return *((const Key*) this->keyPtr);
+                    }
+                    auto value() const -> const Value& {
+                        return *((const Value*) this->valuePtr);
+                    }
+
+                    auto operator * () const -> const Value& {
+                        return *((const Value*) this->valuePtr);
+                    }
+                    auto operator -> () const -> const Value* {
+                        return (const Value*) this->valuePtr;
+                    }
+
+                    auto operator ++ () -> ConstIterator& {
+                        if (!this->handle) {
+                            return *this;
+                        }
+
+                        const usize capacity = src::foundation::OpenHashMap_capacity(this->handle);
+                        if (this->index + 1 >= capacity) {
+                            this->index = capacity;
+                            this->keyPtr = nullptr;
+                            this->valuePtr = nullptr;
+
+                            return *this;
+                        }
+
+                        usize nextIndex = 0;
+                        if (!src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, this->index + 1, &this->keyPtr, &this->valuePtr, &nextIndex)) {
+                            this->index = capacity;
+                            this->keyPtr = nullptr;
+                            this->valuePtr = nullptr;
+
+                            return *this;
+                        }
+
+                        this->index = nextIndex;
+
+                        return *this;
+                    }
+                    auto operator ++ (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        ++(*this);
+
+                        return temp;
+                    }
+
+                    auto operator == (const ConstIterator& other) const -> bool {
+                        return this->handle == other.handle && this->index == other.index;
+                    }
+                    auto operator != (const ConstIterator& other) const -> bool {
+                        return this->handle != other.handle || this->index != other.index;
+                    }
+
+                private:
+                    const src::foundation::OpenHashMap* handle;
+                    usize index;
+                    void* keyPtr;
+                    void* valuePtr;
+            };
+
             explicit OpenHashMap(const usize initialCapacity = 4, u64 (*hash)(const void*) = defaultHash<Key>, bool (*keyEquals)(const void*, const void*) = defaultKeyEquals<Key>) {
                 this->handle = src::foundation::OpenHashMap_construct(initialCapacity, hash, keyEquals);
             }
@@ -281,6 +455,19 @@ namespace Catelier::foundation {
 
             auto reserve(const usize newCapacity) -> bool {
                 return src::foundation::OpenHashMap_reserve(this->handle, newCapacity);
+            }
+
+            auto begin() -> Iterator {
+                return Iterator(this->handle, 0);
+            }
+            auto begin() const -> ConstIterator {
+                return ConstIterator(this->handle, 0);
+            }
+            auto end() -> Iterator {
+                return Iterator(this->handle, src::foundation::OpenHashMap_capacity(this->handle));
+            }
+            auto end() const -> ConstIterator {
+                return ConstIterator(this->handle, src::foundation::OpenHashMap_capacity(this->handle));
             }
 
             auto capacity() const -> usize {

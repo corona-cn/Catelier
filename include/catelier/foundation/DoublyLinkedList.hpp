@@ -16,20 +16,38 @@ namespace Catelier::foundation {
         public:
             class Iterator {
                 public:
-                    explicit Iterator(src::foundation::DoublyLinkedListNode* node) {
+                    explicit Iterator(src::foundation::DoublyLinkedListNode* node = nullptr) {
                         this->node = node;
                     }
 
                     auto operator * () -> Type& {
                         return *((Type*) src::foundation::DoublyLinkedListNode_data(this->node));
                     }
+                    auto operator -> () -> Type* {
+                        return (Type*) src::foundation::DoublyLinkedListNode_data(this->node);
+                    }
+
                     auto operator ++ () -> Iterator& {
                         this->node = src::foundation::DoublyLinkedListNode_next(this->node);
                         return *this;
                     }
+                    auto operator ++ (int) -> Iterator {
+                        Iterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_next(this->node);
+                        return temp;
+                    }
                     auto operator -- () -> Iterator& {
                         this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
                         return *this;
+                    }
+                    auto operator -- (int) -> Iterator {
+                        Iterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
+                        return temp;
+                    }
+
+                    auto operator == (const Iterator& other) const -> bool {
+                        return this->node == other.node;
                     }
                     auto operator != (const Iterator& other) const -> bool {
                         return this->node != other.node;
@@ -41,20 +59,38 @@ namespace Catelier::foundation {
 
             class ConstIterator {
                 public:
-                    explicit ConstIterator(const src::foundation::DoublyLinkedListNode* node) {
+                    explicit ConstIterator(const src::foundation::DoublyLinkedListNode* node = nullptr) {
                         this->node = node;
                     }
 
                     auto operator * () const -> const Type& {
                         return *((const Type*) src::foundation::DoublyLinkedListNode_data(this->node));
                     }
+                    auto operator -> () const -> const Type* {
+                        return (const Type*) src::foundation::DoublyLinkedListNode_data(this->node);
+                    }
+
                     auto operator ++ () -> ConstIterator& {
                         this->node = src::foundation::DoublyLinkedListNode_next(this->node);
                         return *this;
                     }
+                    auto operator ++ (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_next(this->node);
+                        return temp;
+                    }
                     auto operator -- () -> ConstIterator& {
                         this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
                         return *this;
+                    }
+                    auto operator -- (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
+                        return temp;
+                    }
+
+                    auto operator == (const ConstIterator& other) const -> bool {
+                        return this->node == other.node;
                     }
                     auto operator != (const ConstIterator& other) const -> bool {
                         return this->node != other.node;
@@ -66,20 +102,38 @@ namespace Catelier::foundation {
 
             class ReverseIterator {
                 public:
-                    explicit ReverseIterator(src::foundation::DoublyLinkedListNode* node) {
+                    explicit ReverseIterator(src::foundation::DoublyLinkedListNode* node = nullptr) {
                         this->node = node;
                     }
 
                     auto operator * () -> Type& {
                         return *((Type*) src::foundation::DoublyLinkedListNode_data(this->node));
                     }
+                    auto operator -> () -> Type* {
+                        return (Type*) src::foundation::DoublyLinkedListNode_data(this->node);
+                    }
+
                     auto operator ++ () -> ReverseIterator& {
                         this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
                         return *this;
                     }
+                    auto operator ++ (int) -> ReverseIterator {
+                        ReverseIterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
+                        return temp;
+                    }
                     auto operator -- () -> ReverseIterator& {
                         this->node = src::foundation::DoublyLinkedListNode_next(this->node);
                         return *this;
+                    }
+                    auto operator -- (int) -> ReverseIterator {
+                        ReverseIterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_next(this->node);
+                        return temp;
+                    }
+
+                    auto operator == (const ReverseIterator& other) const -> bool {
+                        return this->node == other.node;
                     }
                     auto operator != (const ReverseIterator& other) const -> bool {
                         return this->node != other.node;
@@ -91,20 +145,38 @@ namespace Catelier::foundation {
 
             class ConstReverseIterator {
                 public:
-                    explicit ConstReverseIterator(const src::foundation::DoublyLinkedListNode* node) {
+                    explicit ConstReverseIterator(const src::foundation::DoublyLinkedListNode* node = nullptr) {
                         this->node = node;
                     }
 
                     auto operator * () const -> const Type& {
                         return *((const Type*) src::foundation::DoublyLinkedListNode_data(this->node));
                     }
+                    auto operator -> () const -> const Type* {
+                        return (const Type*) src::foundation::DoublyLinkedListNode_data(this->node);
+                    }
+
                     auto operator ++ () -> ConstReverseIterator& {
                         this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
                         return *this;
                     }
+                    auto operator ++ (int) -> ConstReverseIterator {
+                        ConstReverseIterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_prev(this->node);
+                        return temp;
+                    }
                     auto operator -- () -> ConstReverseIterator& {
                         this->node = src::foundation::DoublyLinkedListNode_next(this->node);
                         return *this;
+                    }
+                    auto operator -- (int) -> ConstReverseIterator {
+                        ConstReverseIterator temp = *this;
+                        this->node = src::foundation::DoublyLinkedListNode_next(this->node);
+                        return temp;
+                    }
+
+                    auto operator == (const ConstReverseIterator& other) const -> bool {
+                        return this->node == other.node;
                     }
                     auto operator != (const ConstReverseIterator& other) const -> bool {
                         return this->node != other.node;

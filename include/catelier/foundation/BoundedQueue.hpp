@@ -8,6 +8,164 @@ namespace Catelier::foundation {
     template<typename Type>
     class BoundedQueue {
         public:
+            class Iterator {
+                public:
+                    explicit Iterator(src::foundation::BoundedQueue* handle = nullptr, const usize index = 0) {
+                        this->handle = handle;
+                        this->index = index;
+                    }
+
+                    auto operator * () -> Type& {
+                        return *((Type*) src::foundation::BoundedQueue_get(this->handle, this->index));
+                    }
+                    auto operator -> () -> Type* {
+                        return (Type*) src::foundation::BoundedQueue_get(this->handle, this->index);
+                    }
+                    auto operator [] (const usize offset) -> Type& {
+                        return *((Type*) src::foundation::BoundedQueue_get(this->handle, this->index + offset));
+                    }
+
+                    auto operator ++ () -> Iterator& {
+                        ++this->index;
+                        return *this;
+                    }
+                    auto operator ++ (int) -> Iterator {
+                        Iterator temp = *this;
+                        ++this->index;
+                        return temp;
+                    }
+                    auto operator -- () -> Iterator& {
+                        --this->index;
+                        return *this;
+                    }
+                    auto operator -- (int) -> Iterator {
+                        Iterator temp = *this;
+                        --this->index;
+                        return temp;
+                    }
+
+                    auto operator += (const usize offset) -> Iterator& {
+                        this->index += offset;
+                        return *this;
+                    }
+                    auto operator -= (const usize offset) -> Iterator& {
+                        this->index -= offset;
+                        return *this;
+                    }
+
+                    auto operator + (const usize offset) const -> Iterator {
+                        return Iterator(this->handle, this->index + offset);
+                    }
+                    auto operator - (const usize offset) const -> Iterator {
+                        return Iterator(this->handle, this->index - offset);
+                    }
+                    auto operator - (const Iterator& other) const -> ssize {
+                        return (ssize) this->index - (ssize) other.index;
+                    }
+
+                    auto operator == (const Iterator& other) const -> bool {
+                        return this->handle == other.handle && this->index == other.index;
+                    }
+                    auto operator != (const Iterator& other) const -> bool {
+                        return this->handle != other.handle || this->index != other.index;
+                    }
+                    auto operator < (const Iterator& other) const -> bool {
+                        return this->index < other.index;
+                    }
+                    auto operator <= (const Iterator& other) const -> bool {
+                        return this->index <= other.index;
+                    }
+                    auto operator > (const Iterator& other) const -> bool {
+                        return this->index > other.index;
+                    }
+                    auto operator >= (const Iterator& other) const -> bool {
+                        return this->index >= other.index;
+                    }
+
+                private:
+                    src::foundation::BoundedQueue* handle;
+                    usize index;
+            };
+
+            class ConstIterator {
+                public:
+                    explicit ConstIterator(const src::foundation::BoundedQueue* handle = nullptr, const usize index = 0) {
+                        this->handle = handle;
+                        this->index = index;
+                    }
+
+                    auto operator * () const -> const Type& {
+                        return *((const Type*) src::foundation::BoundedQueue_get(this->handle, this->index));
+                    }
+                    auto operator -> () const -> const Type* {
+                        return (const Type*) src::foundation::BoundedQueue_get(this->handle, this->index);
+                    }
+                    auto operator [] (const usize offset) const -> const Type& {
+                        return *((const Type*) src::foundation::BoundedQueue_get(this->handle, this->index + offset));
+                    }
+
+                    auto operator ++ () -> ConstIterator& {
+                        ++this->index;
+                        return *this;
+                    }
+                    auto operator ++ (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        ++this->index;
+                        return temp;
+                    }
+                    auto operator -- () -> ConstIterator& {
+                        --this->index;
+                        return *this;
+                    }
+                    auto operator -- (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        --this->index;
+                        return temp;
+                    }
+
+                    auto operator += (const usize offset) -> ConstIterator& {
+                        this->index += offset;
+                        return *this;
+                    }
+                    auto operator -= (const usize offset) -> ConstIterator& {
+                        this->index -= offset;
+                        return *this;
+                    }
+
+                    auto operator + (const usize offset) const -> ConstIterator {
+                        return ConstIterator(this->handle, this->index + offset);
+                    }
+                    auto operator - (const usize offset) const -> ConstIterator {
+                        return ConstIterator(this->handle, this->index - offset);
+                    }
+                    auto operator - (const ConstIterator& other) const -> ssize {
+                        return (ssize) this->index - (ssize) other.index;
+                    }
+
+                    auto operator == (const ConstIterator& other) const -> bool {
+                        return this->handle == other.handle && this->index == other.index;
+                    }
+                    auto operator != (const ConstIterator& other) const -> bool {
+                        return this->handle != other.handle || this->index != other.index;
+                    }
+                    auto operator < (const ConstIterator& other) const -> bool {
+                        return this->index < other.index;
+                    }
+                    auto operator <= (const ConstIterator& other) const -> bool {
+                        return this->index <= other.index;
+                    }
+                    auto operator > (const ConstIterator& other) const -> bool {
+                        return this->index > other.index;
+                    }
+                    auto operator >= (const ConstIterator& other) const -> bool {
+                        return this->index >= other.index;
+                    }
+
+                private:
+                    const src::foundation::BoundedQueue* handle;
+                    usize index;
+            };
+
             explicit BoundedQueue(const usize initialCapacity = 4) {
                 this->handle = src::foundation::BoundedQueue_construct(initialCapacity, sizeof(Type));
             }
@@ -168,6 +326,19 @@ namespace Catelier::foundation {
                 }
 
                 return (const Type*) src::foundation::BoundedQueue_tail(this->handle);
+            }
+
+            auto begin() -> Iterator {
+                return Iterator(this->handle, 0);
+            }
+            auto begin() const -> ConstIterator {
+                return ConstIterator(this->handle, 0);
+            }
+            auto end() -> Iterator {
+                return Iterator(this->handle, this->size());
+            }
+            auto end() const -> ConstIterator {
+                return ConstIterator(this->handle, this->size());
             }
 
             auto capacity() const -> usize {

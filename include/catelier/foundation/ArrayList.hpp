@@ -8,6 +8,160 @@ namespace Catelier::foundation {
     template<typename Type>
     class ArrayList {
         public:
+            class Iterator {
+                public:
+                    explicit Iterator(Type* ptr = nullptr) {
+                        this->ptr = ptr;
+                    }
+
+                    auto operator * () -> Type& {
+                        return *this->ptr;
+                    }
+                    auto operator -> () -> Type* {
+                        return this->ptr;
+                    }
+                    auto operator [] (const usize index) -> Type& {
+                        return this->ptr[index];
+                    }
+
+                    auto operator ++ () -> Iterator& {
+                        ++this->ptr;
+                        return *this;
+                    }
+                    auto operator ++ (int) -> Iterator {
+                        Iterator temp = *this;
+                        ++this->ptr;
+                        return temp;
+                    }
+                    auto operator -- () -> Iterator& {
+                        --this->ptr;
+                        return *this;
+                    }
+                    auto operator -- (int) -> Iterator {
+                        Iterator temp = *this;
+                        --this->ptr;
+                        return temp;
+                    }
+
+                    auto operator += (const usize offset) -> Iterator& {
+                        this->ptr += offset;
+                        return *this;
+                    }
+                    auto operator -= (const usize offset) -> Iterator& {
+                        this->ptr -= offset;
+                        return *this;
+                    }
+
+                    auto operator + (const usize offset) const -> Iterator {
+                        return Iterator(this->ptr + offset);
+                    }
+                    auto operator - (const usize offset) const -> Iterator {
+                        return Iterator(this->ptr - offset);
+                    }
+                    auto operator - (const Iterator& other) const -> ssize {
+                        return this->ptr - other.ptr;
+                    }
+
+                    auto operator == (const Iterator& other) const -> bool {
+                        return this->ptr == other.ptr;
+                    }
+                    auto operator != (const Iterator& other) const -> bool {
+                        return this->ptr != other.ptr;
+                    }
+                    auto operator < (const Iterator& other) const -> bool {
+                        return this->ptr < other.ptr;
+                    }
+                    auto operator <= (const Iterator& other) const -> bool {
+                        return this->ptr <= other.ptr;
+                    }
+                    auto operator > (const Iterator& other) const -> bool {
+                        return this->ptr > other.ptr;
+                    }
+                    auto operator >= (const Iterator& other) const -> bool {
+                        return this->ptr >= other.ptr;
+                    }
+
+                private:
+                    Type* ptr;
+            };
+
+            class ConstIterator {
+                public:
+                    explicit ConstIterator(const Type* ptr = nullptr) {
+                        this->ptr = ptr;
+                    }
+
+                    auto operator * () const -> const Type& {
+                        return *this->ptr;
+                    }
+                    auto operator -> () const -> const Type* {
+                        return this->ptr;
+                    }
+                    auto operator [] (const usize index) const -> const Type& {
+                        return this->ptr[index];
+                    }
+
+                    auto operator ++ () -> ConstIterator& {
+                        ++this->ptr;
+                        return *this;
+                    }
+                    auto operator ++ (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        ++this->ptr;
+                        return temp;
+                    }
+                    auto operator -- () -> ConstIterator& {
+                        --this->ptr;
+                        return *this;
+                    }
+                    auto operator -- (int) -> ConstIterator {
+                        ConstIterator temp = *this;
+                        --this->ptr;
+                        return temp;
+                    }
+
+                    auto operator += (const usize offset) -> ConstIterator& {
+                        this->ptr += offset;
+                        return *this;
+                    }
+                    auto operator -= (const usize offset) -> ConstIterator& {
+                        this->ptr -= offset;
+                        return *this;
+                    }
+
+                    auto operator + (const usize offset) const -> ConstIterator {
+                        return ConstIterator(this->ptr + offset);
+                    }
+                    auto operator - (const usize offset) const -> ConstIterator {
+                        return ConstIterator(this->ptr - offset);
+                    }
+                    auto operator - (const ConstIterator& other) const -> ssize {
+                        return this->ptr - other.ptr;
+                    }
+
+                    auto operator == (const ConstIterator& other) const -> bool {
+                        return this->ptr == other.ptr;
+                    }
+                    auto operator != (const ConstIterator& other) const -> bool {
+                        return this->ptr != other.ptr;
+                    }
+                    auto operator < (const ConstIterator& other) const -> bool {
+                        return this->ptr < other.ptr;
+                    }
+                    auto operator <= (const ConstIterator& other) const -> bool {
+                        return this->ptr <= other.ptr;
+                    }
+                    auto operator > (const ConstIterator& other) const -> bool {
+                        return this->ptr > other.ptr;
+                    }
+                    auto operator >= (const ConstIterator& other) const -> bool {
+                        return this->ptr >= other.ptr;
+                    }
+
+                private:
+                    const Type* ptr;
+            };
+
             explicit ArrayList(const usize initialCapacity = 4) {
                 this->handle = src::foundation::ArrayList_construct(initialCapacity, sizeof(Type));
             }
@@ -203,16 +357,16 @@ namespace Catelier::foundation {
                 return true;
             }
 
-            auto begin() -> Type* {
-                return (Type*) src::foundation::ArrayList_elements(this->handle);
+            auto begin() -> Iterator {
+                return Iterator((Type*) src::foundation::ArrayList_elements(this->handle));
             }
-            auto begin() const -> const Type* {
-                return (const Type*) src::foundation::ArrayList_elements(this->handle);
+            auto begin() const -> ConstIterator {
+                return ConstIterator((const Type*) src::foundation::ArrayList_elements(this->handle));
             }
-            auto end() -> Type* {
+            auto end() -> Iterator {
                 return this->begin() + this->size();
             }
-            auto end() const -> const Type* {
+            auto end() const -> ConstIterator {
                 return this->begin() + this->size();
             }
 
