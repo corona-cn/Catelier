@@ -13,12 +13,18 @@ namespace Catelier::src::foundation {
     auto DoublyLinkedList_move(DoublyLinkedList* self) -> DoublyLinkedList*;
 
     auto DoublyLinkedList_pushHead(DoublyLinkedList* self, const void* inElement, usize inElementSize) -> bool;
+    auto DoublyLinkedList_pushHeadSlot(DoublyLinkedList* self, usize inElementSize) -> void*;
     auto DoublyLinkedList_pushTail(DoublyLinkedList* self, const void* inElement, usize inElementSize) -> bool;
+    auto DoublyLinkedList_pushTailSlot(DoublyLinkedList* self, usize inElementSize) -> void*;
     auto DoublyLinkedList_insertAt(DoublyLinkedList* self, usize index, const void* inElement, usize inElementSize) -> bool;
+    auto DoublyLinkedList_insertAtSlot(DoublyLinkedList* self, usize index, usize inElementSize) -> void*;
 
     auto DoublyLinkedList_popHead(DoublyLinkedList* self) -> bool;
+    auto DoublyLinkedList_popHeadSlot(DoublyLinkedList* self) -> void*;
     auto DoublyLinkedList_popTail(DoublyLinkedList* self) -> bool;
+    auto DoublyLinkedList_popTailSlot(DoublyLinkedList* self) -> void*;
     auto DoublyLinkedList_removeAt(DoublyLinkedList* self, usize index) -> bool;
+    auto DoublyLinkedList_removeAtSlot(DoublyLinkedList* self, usize index) -> void*;
     auto DoublyLinkedList_removeIf(DoublyLinkedList* self, const void* inData, bool (*dataEquals)(const void*, const void*)) -> bool;
     auto DoublyLinkedList_clear(DoublyLinkedList* self) -> bool;
 
@@ -27,6 +33,7 @@ namespace Catelier::src::foundation {
     auto DoublyLinkedList_tail(const DoublyLinkedList* self) -> DoublyLinkedListNode*;
 
     auto DoublyLinkedList_set(DoublyLinkedList* self, usize index, const void* inElement, usize inElementSize) -> bool;
+    auto DoublyLinkedList_setSlot(DoublyLinkedList* self, usize index, usize inElementSize) -> void*;
 
     auto DoublyLinkedList_reverse(DoublyLinkedList* self) -> bool;
 

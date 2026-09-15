@@ -11,13 +11,19 @@ namespace Catelier::src::foundation {
     auto OpenHashMap_move(OpenHashMap* self) -> OpenHashMap*;
 
     auto OpenHashMap_insert(OpenHashMap* self, const void* inKey, usize inKeySize, const void* inValue, usize inValueSize) -> bool;
+    auto OpenHashMap_insertSlot(OpenHashMap* self, const void* inKey, usize inKeySize, usize inValueSize, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool;
 
     auto OpenHashMap_vacate(OpenHashMap* self, const void* inKey) -> bool;
+    auto OpenHashMap_vacateSlot(OpenHashMap* self, const void* inKey, void** keySlotOut, void** valueSlotOut) -> bool;
     auto OpenHashMap_vacateAll(OpenHashMap* self) -> bool;
+
     auto OpenHashMap_erase(OpenHashMap* self, const void* inKey) -> bool;
+    auto OpenHashMap_eraseSlot(OpenHashMap* self, const void* inKey, void** keySlotOut, void** valueSlotOut) -> bool;
     auto OpenHashMap_eraseAll(OpenHashMap* self) -> bool;
 
     auto OpenHashMap_find(const OpenHashMap* self, const void* inKey, void** valueOut) -> bool;
+
+    auto OpenHashMap_nextOccupiedSlot(const OpenHashMap* self, usize fromIndex, void** keySlotOut, void** valueSlotOut, usize* nextIndexOut) -> bool;
 
     auto OpenHashMap_reserve(OpenHashMap* self, usize newCapacity) -> bool;
 

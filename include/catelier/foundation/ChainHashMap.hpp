@@ -1,4 +1,8 @@
 #pragma once
+#include <cstdlib>
+#include <new>
+#include <utility>
+
 #include "../../../src/catelier/foundation/ChainHashMap.hpp"
 #include "../../../src/catelier/util/HashUtils.hpp"
 
@@ -21,7 +25,15 @@ namespace Catelier::foundation {
             }
             ~ChainHashMap() {
                 if (this->handle) {
+                    for (usize i = 0; i < src::foundation::ChainHashMap_capacity(this->handle); ++i) {
+                        for (auto node = src::foundation::ChainHashMap_headAt(this->handle, i); node; node = src::foundation::ChainHashMapNode_next(node)) {
+                            ((Key*) src::foundation::ChainHashMapNode_key(node))->~Key();
+                            ((Value*) src::foundation::ChainHashMapNode_value(node))->~Value();
+                        }
+                    }
+
                     src::foundation::ChainHashMap_destruct(this->handle);
+
                     this->handle = nullptr;
                 }
             }
@@ -32,21 +44,32 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::ChainHashMap_copy(other.handle);
+                this->handle = src::foundation::ChainHashMap_construct(src::foundation::ChainHashMap_capacity(other.handle), defaultHash<Key>, defaultKeyEquals<Key>);
+                if (!this->handle) {
+                    return;
+                }
+
+                other.forEach([this](const Key& key, const Value& value) {
+                    this->insert(key, value);
+                });
             }
             ChainHashMap(ChainHashMap&& other) noexcept {
                 this->handle = src::foundation::ChainHashMap_move(other.handle);
             }
             ChainHashMap& operator = (const ChainHashMap& other) {
                 if (this != &other) {
-                    if (this->handle) {
-                        src::foundation::ChainHashMap_destruct(this->handle);
-                        this->handle = nullptr;
+                    this->clear();
+
+                    if (!this->handle) {
+                        this->handle = src::foundation::ChainHashMap_construct(src::foundation::ChainHashMap_capacity(other.handle), defaultHash<Key>, defaultKeyEquals<Key>);
+                        if (!this->handle) {
+                            return *this;
+                        }
                     }
 
-                    if (other.handle) {
-                        this->handle = src::foundation::ChainHashMap_copy(other.handle);
-                    }
+                    other.forEach([this](const Key& key, const Value& value) {
+                        this->insert(key, value);
+                    });
                 }
 
                 return *this;
@@ -54,8 +77,14 @@ namespace Catelier::foundation {
             ChainHashMap& operator = (ChainHashMap&& other) noexcept {
                 if (this != &other) {
                     if (this->handle) {
+                        for (usize i = 0; i < src::foundation::ChainHashMap_capacity(this->handle); ++i) {
+                            for (auto node = src::foundation::ChainHashMap_headAt(this->handle, i); node; node = src::foundation::ChainHashMapNode_next(node)) {
+                                ((Key*) src::foundation::ChainHashMapNode_key(node))->~Key();
+                                ((Value*) src::foundation::ChainHashMapNode_value(node))->~Value();
+                            }
+                        }
+
                         src::foundation::ChainHashMap_destruct(this->handle);
-                        this->handle = nullptr;
                     }
 
                     this->handle = src::foundation::ChainHashMap_move(other.handle);
@@ -65,13 +94,93 @@ namespace Catelier::foundation {
             }
 
             auto insert(const Key& key, const Value& value) -> bool {
-                return src::foundation::ChainHashMap_insert(this->handle, &key, sizeof(Key), &value, sizeof(Value));
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* oldValueSlot = nullptr;
+                void* newValueSlot = nullptr;
+
+                if (!src::foundation::ChainHashMap_insertSlot(this->handle, &key, sizeof(Key), sizeof(Value), &keySlot, &oldValueSlot, &newValueSlot)) {
+                    return false;
+                }
+
+                // 如果 key 已存在，先析构并释放旧 value
+                if (oldValueSlot) {
+                    ((Value*) oldValueSlot)->~Value();
+                    free(oldValueSlot);
+                }
+
+                // 如果是新 key，构造 key
+                if (keySlot) {
+                    new(keySlot) Key(key);
+                }
+
+                // 构造新 value
+                new(newValueSlot) Value(value);
+
+                return true;
+            }
+            auto insert(const Key& key, Value&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* oldValueSlot = nullptr;
+                void* newValueSlot = nullptr;
+
+                if (!src::foundation::ChainHashMap_insertSlot(this->handle, &key, sizeof(Key), sizeof(Value), &keySlot, &oldValueSlot, &newValueSlot)) {
+                    return false;
+                }
+
+                if (oldValueSlot) {
+                    ((Value*) oldValueSlot)->~Value();
+                    free(oldValueSlot);
+                }
+
+                if (keySlot) {
+                    new(keySlot) Key(key);
+                }
+
+                new(newValueSlot) Value(std::move(value));
+
+                return true;
             }
 
             auto remove(const Key& key) -> bool {
-                return src::foundation::ChainHashMap_remove(this->handle, &key);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* valueSlot = nullptr;
+
+                if (!src::foundation::ChainHashMap_removeSlot(this->handle, &key, &keySlot, &valueSlot)) {
+                    return false;
+                }
+
+                ((Key*) keySlot)->~Key();
+                free(keySlot);
+
+                ((Value*) valueSlot)->~Value();
+                free(valueSlot);
+
+                return true;
             }
             auto clear() -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                for (usize i = 0; i < src::foundation::ChainHashMap_capacity(this->handle); ++i) {
+                    for (auto node = src::foundation::ChainHashMap_headAt(this->handle, i); node; node = src::foundation::ChainHashMapNode_next(node)) {
+                        ((Key*) src::foundation::ChainHashMapNode_key(node))->~Key();
+                        ((Value*) src::foundation::ChainHashMapNode_value(node))->~Value();
+                    }
+                }
+
                 return src::foundation::ChainHashMap_clear(this->handle);
             }
 
@@ -103,6 +212,19 @@ namespace Catelier::foundation {
             }
             auto operator[](const Key& key) const -> const Value& {
                 return *find(key);
+            }
+
+            template<typename Function>
+            auto forEach(Function function) const -> void {
+                if (!this->handle) {
+                    return;
+                }
+
+                for (usize i = 0; i < src::foundation::ChainHashMap_capacity(this->handle); ++i) {
+                    for (auto node = src::foundation::ChainHashMap_headAt(this->handle, i); node; node = src::foundation::ChainHashMapNode_next(node)) {
+                        function(*((const Key*) src::foundation::ChainHashMapNode_key(node)), *((const Value*) src::foundation::ChainHashMapNode_value(node)));
+                    }
+                }
             }
 
             auto reserve(const usize newCapacity) -> bool {

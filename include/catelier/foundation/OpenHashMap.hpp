@@ -1,4 +1,7 @@
 #pragma once
+#include <new>
+#include <utility>
+
 #include "../../../src/catelier/foundation/OpenHashMap.hpp"
 #include "../../../src/catelier/util/HashUtils.hpp"
 
@@ -21,7 +24,19 @@ namespace Catelier::foundation {
             }
             ~OpenHashMap() {
                 if (this->handle) {
+                    usize index = 0;
+                    void* key = nullptr;
+                    void* value = nullptr;
+
+                    while (src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, index, &key, &value, &index)) {
+                        ((Key*) key)->~Key();
+                        ((Value*) value)->~Value();
+
+                        index++;
+                    }
+
                     src::foundation::OpenHashMap_destruct(this->handle);
+
                     this->handle = nullptr;
                 }
             }
@@ -32,21 +47,32 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::OpenHashMap_copy(other.handle);
+                this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), defaultHash<Key>, defaultKeyEquals<Key>);
+                if (!this->handle) {
+                    return;
+                }
+
+                other.forEach([this](const Key& key, const Value& value) {
+                    this->insert(key, value);
+                });
             }
             OpenHashMap(OpenHashMap&& other) noexcept {
                 this->handle = src::foundation::OpenHashMap_move(other.handle);
             }
             OpenHashMap& operator = (const OpenHashMap& other) {
                 if (this != &other) {
-                    if (this->handle) {
-                        src::foundation::OpenHashMap_destruct(this->handle);
-                        this->handle = nullptr;
+                    this->eraseAll();
+
+                    if (!this->handle) {
+                        this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), defaultHash<Key>, defaultKeyEquals<Key>);
+                        if (!this->handle) {
+                            return *this;
+                        }
                     }
 
-                    if (other.handle) {
-                        this->handle = src::foundation::OpenHashMap_copy(other.handle);
-                    }
+                    other.forEach([this](const Key& key, const Value& value) {
+                        this->insert(key, value);
+                    });
                 }
 
                 return *this;
@@ -54,8 +80,18 @@ namespace Catelier::foundation {
             OpenHashMap& operator = (OpenHashMap&& other) noexcept {
                 if (this != &other) {
                     if (this->handle) {
+                        usize index = 0;
+                        void* key = nullptr;
+                        void* value = nullptr;
+
+                        while (src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, index, &key, &value, &index)) {
+                            ((Key*) key)->~Key();
+                            ((Value*) value)->~Value();
+
+                            index++;
+                        }
+
                         src::foundation::OpenHashMap_destruct(this->handle);
-                        this->handle = nullptr;
                     }
 
                     this->handle = src::foundation::OpenHashMap_move(other.handle);
@@ -65,7 +101,59 @@ namespace Catelier::foundation {
             }
 
             auto insert(const Key& key, const Value& value) -> bool {
-                return src::foundation::OpenHashMap_insert(this->handle, &key, sizeof(Key), &value, sizeof(Value));
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* oldValueSlot = nullptr;
+                void* newValueSlot = nullptr;
+
+                if (!src::foundation::OpenHashMap_insertSlot(this->handle, &key, sizeof(Key), sizeof(Value), &keySlot, &oldValueSlot, &newValueSlot)) {
+                    return false;
+                }
+
+                // 如果 key 已存在，先析构并释放旧 value
+                if (oldValueSlot) {
+                    ((Value*) oldValueSlot)->~Value();
+                    free(oldValueSlot);
+                }
+
+                // 如果是新 key，构造 key
+                if (keySlot) {
+                    new(keySlot) Key(key);
+                }
+
+                // 构造新 value
+                new(newValueSlot) Value(value);
+
+                return true;
+            }
+            auto insert(const Key& key, Value&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* oldValueSlot = nullptr;
+                void* newValueSlot = nullptr;
+
+                if (!src::foundation::OpenHashMap_insertSlot(this->handle, &key, sizeof(Key), sizeof(Value), &keySlot, &oldValueSlot, &newValueSlot)) {
+                    return false;
+                }
+
+                if (oldValueSlot) {
+                    ((Value*) oldValueSlot)->~Value();
+                    free(oldValueSlot);
+                }
+
+                if (keySlot) {
+                    new(keySlot) Key(key);
+                }
+
+                new(newValueSlot) Value(std::move(value));
+
+                return true;
             }
 
             auto find(const Key& key) -> Value* {
@@ -99,16 +187,96 @@ namespace Catelier::foundation {
             }
 
             auto vacate(const Key& key) -> bool {
-                return src::foundation::OpenHashMap_vacate(this->handle, &key);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* valueSlot = nullptr;
+
+                if (!src::foundation::OpenHashMap_vacateSlot(this->handle, &key, &keySlot, &valueSlot)) {
+                    return false;
+                }
+
+                ((Key*) keySlot)->~Key();
+                free(keySlot);
+
+                ((Value*) valueSlot)->~Value();
+                free(valueSlot);
+
+                return true;
             }
             auto vacateAll() -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                usize index = 0;
+                void* key = nullptr;
+                void* value = nullptr;
+
+                while (src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, index, &key, &value, &index)) {
+                    ((Key*) key)->~Key();
+                    ((Value*) value)->~Value();
+
+                    index++;
+                }
+
                 return src::foundation::OpenHashMap_vacateAll(this->handle);
             }
             auto erase(const Key& key) -> bool {
-                return src::foundation::OpenHashMap_erase(this->handle, &key);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* keySlot = nullptr;
+                void* valueSlot = nullptr;
+
+                if (!src::foundation::OpenHashMap_eraseSlot(this->handle, &key, &keySlot, &valueSlot)) {
+                    return false;
+                }
+
+                ((Key*) keySlot)->~Key();
+                free(keySlot);
+
+                ((Value*) valueSlot)->~Value();
+                free(valueSlot);
+
+                return true;
             }
             auto eraseAll() -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                usize index = 0;
+                void* key = nullptr;
+                void* value = nullptr;
+
+                while (src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, index, &key, &value, &index)) {
+                    ((Key*) key)->~Key();
+                    ((Value*) value)->~Value();
+
+                    index++;
+                }
+
                 return src::foundation::OpenHashMap_eraseAll(this->handle);
+            }
+
+            template<typename Function>
+            auto forEach(Function function) const -> void {
+                if (!this->handle) {
+                    return;
+                }
+
+                usize index = 0;
+                void* key = nullptr;
+                void* value = nullptr;
+
+                while (src::foundation::OpenHashMap_nextOccupiedSlot(this->handle, index, &key, &value, &index)) {
+                    function(*((const Key*) key), *((const Value*) value));
+                    index++;
+                }
             }
 
             auto reserve(const usize newCapacity) -> bool {

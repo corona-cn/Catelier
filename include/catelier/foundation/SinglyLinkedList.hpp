@@ -1,4 +1,8 @@
 #pragma once
+#include <cstdlib>
+#include <new>
+#include <utility>
+
 #include "../../../src/catelier/foundation/SinglyLinkedList.hpp"
 
 namespace Catelier::foundation {
@@ -57,7 +61,12 @@ namespace Catelier::foundation {
             }
             ~SinglyLinkedList() {
                 if (this->handle) {
+                    for (auto node = src::foundation::SinglyLinkedList_begin(this->handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
+                        ((Type*) src::foundation::SinglyLinkedListNode_data(node))->~Type();
+                    }
+
                     src::foundation::SinglyLinkedList_destruct(this->handle);
+
                     this->handle = nullptr;
                 }
             }
@@ -68,20 +77,42 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::SinglyLinkedList_copy(other.handle, sizeof(Type));
+                this->handle = src::foundation::SinglyLinkedList_construct();
+                if (!this->handle) {
+                    return;
+                }
+
+                for (auto node = src::foundation::SinglyLinkedList_begin(other.handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
+                    void* const slot = src::foundation::SinglyLinkedList_pushTailSlot(this->handle, sizeof(Type));
+                    if (!slot) {
+                        this->clear();
+
+                        src::foundation::SinglyLinkedList_destruct(this->handle);
+
+                        this->handle = nullptr;
+
+                        return;
+                    }
+
+                    new(slot) Type(*((const Type*) src::foundation::SinglyLinkedListNode_data(node)));
+                }
             }
             SinglyLinkedList(SinglyLinkedList&& other) noexcept {
                 this->handle = src::foundation::SinglyLinkedList_move(other.handle);
             }
             SinglyLinkedList& operator = (const SinglyLinkedList& other) {
                 if (this != &other) {
-                    if (this->handle) {
-                        src::foundation::SinglyLinkedList_destruct(this->handle);
-                        this->handle = nullptr;
+                    this->clear();
+
+                    if (!this->handle) {
+                        this->handle = src::foundation::SinglyLinkedList_construct();
+                        if (!this->handle) {
+                            return *this;
+                        }
                     }
 
-                    if (other.handle) {
-                        this->handle = src::foundation::SinglyLinkedList_copy(other.handle, sizeof(Type));
+                    for (auto node = src::foundation::SinglyLinkedList_begin(other.handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
+                        this->pushTail(*((const Type*) src::foundation::SinglyLinkedListNode_data(node)));
                     }
                 }
 
@@ -90,6 +121,10 @@ namespace Catelier::foundation {
             SinglyLinkedList& operator = (SinglyLinkedList&& other) noexcept {
                 if (this != &other) {
                     if (this->handle) {
+                        for (auto node = src::foundation::SinglyLinkedList_begin(this->handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
+                            ((Type*) src::foundation::SinglyLinkedListNode_data(node))->~Type();
+                        }
+
                         src::foundation::SinglyLinkedList_destruct(this->handle);
                     }
 
@@ -100,28 +135,164 @@ namespace Catelier::foundation {
             }
 
             auto pushHead(const Type& value) -> bool {
-                return src::foundation::SinglyLinkedList_pushHead(this->handle, &value, sizeof(Type));
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_pushHeadSlot(this->handle, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(value);
+
+                return true;
+            }
+            auto pushHead(Type&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_pushHeadSlot(this->handle, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(std::move(value));
+
+                return true;
             }
             auto pushTail(const Type& value) -> bool {
-                return src::foundation::SinglyLinkedList_pushTail(this->handle, &value, sizeof(Type));
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_pushTailSlot(this->handle, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(value);
+
+                return true;
+            }
+            auto pushTail(Type&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_pushTailSlot(this->handle, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(std::move(value));
+
+                return true;
             }
             auto insertAt(const usize index, const Type& value) -> bool {
-                return src::foundation::SinglyLinkedList_insertAt(this->handle, index, &value, sizeof(Type));
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_insertAtSlot(this->handle, index, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(value);
+
+                return true;
+            }
+            auto insertAt(const usize index, Type&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_insertAtSlot(this->handle, index, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(std::move(value));
+
+                return true;
             }
 
             auto popHead() -> bool {
-                return src::foundation::SinglyLinkedList_popHead(this->handle);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_popHeadSlot(this->handle);
+                if (!slot) {
+                    return false;
+                }
+
+                ((Type*) slot)->~Type();
+
+                free(slot);
+
+                return true;
             }
             auto popTail() -> bool {
-                return src::foundation::SinglyLinkedList_popTail(this->handle);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_popTailSlot(this->handle);
+                if (!slot) {
+                    return false;
+                }
+
+                ((Type*) slot)->~Type();
+
+                free(slot);
+
+                return true;
             }
             auto removeAt(const usize index) -> bool {
-                return src::foundation::SinglyLinkedList_removeAt(this->handle, index);
+                if (!this->handle) {
+                    return false;
+                }
+
+                void* const slot = src::foundation::SinglyLinkedList_removeAtSlot(this->handle, index);
+                if (!slot) {
+                    return false;
+                }
+
+                ((Type*) slot)->~Type();
+
+                free(slot);
+
+                return true;
             }
             auto removeIf(const Type& value) -> bool {
-                return src::foundation::SinglyLinkedList_removeIf(this->handle, &value, defaultDataEquals<Type>);
+                if (!this->handle) {
+                    return false;
+                }
+
+                // 遍历查找第一个匹配的索引，然后走 removeAt 完成析构与移除
+                usize index = 0;
+                for (auto node = src::foundation::SinglyLinkedList_begin(this->handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
+                    if (*((const Type*) src::foundation::SinglyLinkedListNode_data(node)) == value) {
+                        return this->removeAt(index);
+                    }
+
+                    index++;
+                }
+
+                return false;
             }
             auto clear() -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                for (auto node = src::foundation::SinglyLinkedList_begin(this->handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
+                    ((Type*) src::foundation::SinglyLinkedListNode_data(node))->~Type();
+                }
+
                 return src::foundation::SinglyLinkedList_clear(this->handle);
             }
 
@@ -175,7 +346,47 @@ namespace Catelier::foundation {
             }
 
             auto set(const usize index, const Type& value) -> bool {
-                return src::foundation::SinglyLinkedList_set(this->handle, index, &value, sizeof(Type));
+                if (!this->handle) {
+                    return false;
+                }
+
+                // 先析构目标位置的旧元素
+                auto* const targetNode = src::foundation::SinglyLinkedList_get(this->handle, index);
+                if (!targetNode) {
+                    return false;
+                }
+
+                ((Type*) src::foundation::SinglyLinkedListNode_data(targetNode))->~Type();
+
+                void* const slot = src::foundation::SinglyLinkedList_setSlot(this->handle, index, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(value);
+
+                return true;
+            }
+            auto set(const usize index, Type&& value) -> bool {
+                if (!this->handle) {
+                    return false;
+                }
+
+                auto* const targetNode = src::foundation::SinglyLinkedList_get(this->handle, index);
+                if (!targetNode) {
+                    return false;
+                }
+
+                ((Type*) src::foundation::SinglyLinkedListNode_data(targetNode))->~Type();
+
+                void* const slot = src::foundation::SinglyLinkedList_setSlot(this->handle, index, sizeof(Type));
+                if (!slot) {
+                    return false;
+                }
+
+                new(slot) Type(std::move(value));
+
+                return true;
             }
 
             auto reverse() -> bool {

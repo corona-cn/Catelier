@@ -13,12 +13,18 @@ namespace Catelier::src::foundation {
     auto SinglyLinkedList_move(SinglyLinkedList* self) -> SinglyLinkedList*;
 
     auto SinglyLinkedList_pushHead(SinglyLinkedList* self, const void* inElement, usize inElementSize) -> bool;
+    auto SinglyLinkedList_pushHeadSlot(SinglyLinkedList* self, usize inElementSize) -> void*;
     auto SinglyLinkedList_pushTail(SinglyLinkedList* self, const void* inElement, usize inElementSize) -> bool;
+    auto SinglyLinkedList_pushTailSlot(SinglyLinkedList* self, usize inElementSize) -> void*;
     auto SinglyLinkedList_insertAt(SinglyLinkedList* self, usize index, const void* inElement, usize inElementSize) -> bool;
+    auto SinglyLinkedList_insertAtSlot(SinglyLinkedList* self, usize index, usize inElementSize) -> void*;
 
     auto SinglyLinkedList_popHead(SinglyLinkedList* self) -> bool;
+    auto SinglyLinkedList_popHeadSlot(SinglyLinkedList* self) -> void*;
     auto SinglyLinkedList_popTail(SinglyLinkedList* self) -> bool;
+    auto SinglyLinkedList_popTailSlot(SinglyLinkedList* self) -> void*;
     auto SinglyLinkedList_removeAt(SinglyLinkedList* self, usize index) -> bool;
+    auto SinglyLinkedList_removeAtSlot(SinglyLinkedList* self, usize index) -> void*;
     auto SinglyLinkedList_removeIf(SinglyLinkedList* self, const void* inData, bool (*dataEquals)(const void*, const void*)) -> bool;
     auto SinglyLinkedList_clear(SinglyLinkedList* self) -> bool;
 
@@ -27,6 +33,7 @@ namespace Catelier::src::foundation {
     auto SinglyLinkedList_tail(const SinglyLinkedList* self) -> SinglyLinkedListNode*;
 
     auto SinglyLinkedList_set(SinglyLinkedList* self, usize index, const void* inElement, usize inElementSize) -> bool;
+    auto SinglyLinkedList_setSlot(SinglyLinkedList* self, usize index, usize inElementSize) -> void*;
 
     auto SinglyLinkedList_reverse(SinglyLinkedList* self) -> bool;
 

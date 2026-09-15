@@ -147,6 +147,29 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto SinglyLinkedList_pushHeadSlot(SinglyLinkedList* self, const usize inElementSize) -> void* {
+        if (!self || inElementSize == 0) {
+            return nullptr;
+        }
+
+        auto* const newNode = (SinglyLinkedListNode*) malloc(sizeof(SinglyLinkedListNode));
+        if (!newNode) {
+            return nullptr;
+        }
+
+        // 分配未初始化的数据内存槽位，返回给调用者做 placement new
+        newNode->data = malloc(inElementSize);
+        if (!newNode->data) {
+            free(newNode);
+            return nullptr;
+        }
+
+        newNode->nextNode = self->headNode;
+        self->headNode = newNode;
+        self->size++;
+
+        return newNode->data;
+    }
     auto SinglyLinkedList_pushTail(SinglyLinkedList* self, const void* inElement, const usize inElementSize) -> bool {
         if (!self || inElementSize == 0) {
             return false;
@@ -188,6 +211,42 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto SinglyLinkedList_pushTailSlot(SinglyLinkedList* self, const usize inElementSize) -> void* {
+        if (!self || inElementSize == 0) {
+            return nullptr;
+        }
+
+        auto* const newNode = (SinglyLinkedListNode*) malloc(sizeof(SinglyLinkedListNode));
+        if (!newNode) {
+            return nullptr;
+        }
+
+        // 分配未初始化的数据内存槽位，返回给调用者做 placement new
+        newNode->data = malloc(inElementSize);
+        if (!newNode->data) {
+            free(newNode);
+            return nullptr;
+        }
+
+        newNode->nextNode = nullptr;
+
+        if (self->headNode == nullptr) {
+            // 节点链不存在，新节点就是头节点
+            self->headNode = newNode;
+        } else {
+            // 节点链存在，遍历到最后一个节点
+            auto* lastNode = self->headNode;
+            while (lastNode->nextNode) {
+                lastNode = lastNode->nextNode;
+            }
+
+            lastNode->nextNode = newNode;
+        }
+
+        self->size++;
+
+        return newNode->data;
+    }
     auto SinglyLinkedList_insertAt(SinglyLinkedList* self, const usize index, const void* inElement, const usize inElementSize) -> bool {
         if (!self || inElementSize == 0 || index > self->size) {
             return false;
@@ -228,6 +287,42 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto SinglyLinkedList_insertAtSlot(SinglyLinkedList* self, const usize index, const usize inElementSize) -> void* {
+        if (!self || inElementSize == 0 || index > self->size) {
+            return nullptr;
+        }
+
+        auto* const newNode = (SinglyLinkedListNode*) malloc(sizeof(SinglyLinkedListNode));
+        if (!newNode) {
+            return nullptr;
+        }
+
+        // 分配未初始化的数据内存槽位，返回给调用者做 placement new
+        newNode->data = malloc(inElementSize);
+        if (!newNode->data) {
+            free(newNode);
+            return nullptr;
+        }
+
+        if (index == 0) {
+            // 插入到头部
+            newNode->nextNode = self->headNode;
+            self->headNode = newNode;
+        } else {
+            // 遍历到 index - 1 的位置
+            auto* prevNode = self->headNode;
+            for (usize i = 0; i < index - 1; ++i) {
+                prevNode = prevNode->nextNode;
+            }
+
+            newNode->nextNode = prevNode->nextNode;
+            prevNode->nextNode = newNode;
+        }
+
+        self->size++;
+
+        return newNode->data;
+    }
 
     auto SinglyLinkedList_popHead(SinglyLinkedList* self) -> bool {
         if (!self || self->size == 0 || !self->headNode) {
@@ -250,6 +345,26 @@ namespace Catelier::src::foundation {
         self->size--;
 
         return true;
+    }
+    auto SinglyLinkedList_popHeadSlot(SinglyLinkedList* self) -> void* {
+        if (!self || self->size == 0 || !self->headNode) {
+            return nullptr;
+        }
+
+        // 保存下一个节点的指针
+        auto* const nextNode = self->headNode->nextNode;
+
+        // 保存头节点的数据指针，稍后返回给调用者
+        void* const data = self->headNode->data;
+
+        // 释放头节点结构体本身，但不释放数据内存
+        free(self->headNode);
+
+        // 更新头节点为下一个节点，即使 nextNode 是 nullptr
+        self->headNode = nextNode;
+        self->size--;
+
+        return data;
     }
     auto SinglyLinkedList_popTail(SinglyLinkedList* self) -> bool {
         if (!self || self->size == 0 || !self->headNode) {
@@ -295,6 +410,42 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto SinglyLinkedList_popTailSlot(SinglyLinkedList* self) -> void* {
+        if (!self || self->size == 0 || !self->headNode) {
+            return nullptr;
+        }
+
+        // 节点链不存在，只有头节点存在，直接复用头节点弹出槽位的逻辑
+        if (!self->headNode->nextNode) {
+            void* const data = self->headNode->data;
+
+            free(self->headNode);
+            self->headNode = nullptr;
+            self->size--;
+
+            return data;
+        }
+
+        // 节点链存在，遍历查找尾节点和未来尾节点
+        auto* tailNode = self->headNode->nextNode;
+        auto* futureTailNode = self->headNode;
+        while (tailNode->nextNode) {
+            futureTailNode = tailNode;
+            tailNode = tailNode->nextNode;
+        }
+
+        // 保存尾节点的数据指针，稍后返回给调用者
+        void* const data = tailNode->data;
+
+        // 释放尾节点结构体本身，但不释放数据内存
+        free(tailNode);
+
+        // 将未来尾节点的下一节点指针置空
+        futureTailNode->nextNode = nullptr;
+        self->size--;
+
+        return data;
+    }
     auto SinglyLinkedList_removeAt(SinglyLinkedList* self, const usize index) -> bool {
         if (!self || index >= self->size || !self->headNode) {
             return false;
@@ -333,6 +484,42 @@ namespace Catelier::src::foundation {
         self->size--;
 
         return true;
+    }
+    auto SinglyLinkedList_removeAtSlot(SinglyLinkedList* self, const usize index) -> void* {
+        if (!self || index >= self->size || !self->headNode) {
+            return nullptr;
+        }
+
+        // 目标头节点，直接复用头节点弹出槽位函数
+        if (index == 0) {
+            return SinglyLinkedList_popHeadSlot(self);
+        }
+
+        // 目标尾节点，直接复用尾节点弹出槽位函数
+        if (index == self->size - 1) {
+            return SinglyLinkedList_popTailSlot(self);
+        }
+
+        // 找到 index - 1 位置的节点（目标节点的前一个）
+        auto* prevNode = self->headNode;
+        for (usize i = 0; i < index - 1; ++i) {
+            prevNode = prevNode->nextNode;
+        }
+
+        // 目标节点
+        auto* targetNode = prevNode->nextNode;
+
+        // 保存目标节点的数据指针，稍后返回给调用者
+        void* const data = targetNode->data;
+
+        // 让前一个节点跳过目标节点，直接指向目标节点的下一个节点
+        prevNode->nextNode = targetNode->nextNode;
+
+        // 释放目标节点结构体本身，但不释放数据内存
+        free(targetNode);
+        self->size--;
+
+        return data;
     }
     auto SinglyLinkedList_removeIf(SinglyLinkedList* self, const void* inData, bool (*dataEquals)(const void*, const void*)) -> bool {
         if (!self || !dataEquals || self->size == 0) {
@@ -465,6 +652,30 @@ namespace Catelier::src::foundation {
         targetNode->data = newData;
 
         return true;
+    }
+    auto SinglyLinkedList_setSlot(const SinglyLinkedList* self, const usize index, const usize inElementSize) -> void* {
+        if (!self || index >= self->size || inElementSize == 0) {
+            return nullptr;
+        }
+
+        // 遍历到目标节点
+        auto* targetNode = self->headNode;
+        for (usize i = 0; i < index; ++i) {
+            targetNode = targetNode->nextNode;
+        }
+
+        // 释放旧数据内存（调用者已在此之前析构旧元素）
+        if (targetNode->data) {
+            free(targetNode->data);
+        }
+
+        // 分配未初始化的新数据内存槽位，返回给调用者做 placement new
+        targetNode->data = malloc(inElementSize);
+        if (!targetNode->data) {
+            return nullptr;
+        }
+
+        return targetNode->data;
     }
 
     auto SinglyLinkedList_reverse(SinglyLinkedList* self) -> bool {

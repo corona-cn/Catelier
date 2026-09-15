@@ -161,6 +161,40 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto DoublyLinkedList_pushHeadSlot(DoublyLinkedList* self, const usize inElementSize) -> void* {
+        if (!self || inElementSize == 0) {
+            return nullptr;
+        }
+
+        auto* const newNode = (DoublyLinkedListNode*) malloc(sizeof(DoublyLinkedListNode));
+        if (!newNode) {
+            return nullptr;
+        }
+
+        // 分配未初始化的数据内存槽位，返回给调用者做 placement new
+        newNode->data = malloc(inElementSize);
+        if (!newNode->data) {
+            free(newNode);
+            return nullptr;
+        }
+
+        // 新节点插入到头部，prev 为 nullptr，next 指向原头节点
+        newNode->prevNode = nullptr;
+        newNode->nextNode = self->headNode;
+
+        if (self->headNode) {
+            // 原头节点的 prev 指向新节点
+            self->headNode->prevNode = newNode;
+        } else {
+            // 空链表时，新节点也是尾节点
+            self->tailNode = newNode;
+        }
+
+        self->headNode = newNode;
+        self->size++;
+
+        return newNode->data;
+    }
     auto DoublyLinkedList_pushTail(DoublyLinkedList* self, const void* inElement, const usize inElementSize) -> bool {
         if (!self || inElementSize == 0) {
             return false;
@@ -198,6 +232,40 @@ namespace Catelier::src::foundation {
         self->size++;
 
         return true;
+    }
+    auto DoublyLinkedList_pushTailSlot(DoublyLinkedList* self, const usize inElementSize) -> void* {
+        if (!self || inElementSize == 0) {
+            return nullptr;
+        }
+
+        auto* const newNode = (DoublyLinkedListNode*) malloc(sizeof(DoublyLinkedListNode));
+        if (!newNode) {
+            return nullptr;
+        }
+
+        // 分配未初始化的数据内存槽位，返回给调用者做 placement new
+        newNode->data = malloc(inElementSize);
+        if (!newNode->data) {
+            free(newNode);
+            return nullptr;
+        }
+
+        // 新节点插入到尾部，next 为 nullptr，prev 指向原尾节点
+        newNode->nextNode = nullptr;
+        newNode->prevNode = self->tailNode;
+
+        if (self->tailNode) {
+            // 原尾节点的 next 指向新节点
+            self->tailNode->nextNode = newNode;
+        } else {
+            // 空链表时，新节点也是头节点
+            self->headNode = newNode;
+        }
+
+        self->tailNode = newNode;
+        self->size++;
+
+        return newNode->data;
     }
     auto DoublyLinkedList_insertAt(DoublyLinkedList* self, const usize index, const void* inElement, const usize inElementSize) -> bool {
         if (!self || inElementSize == 0 || index > self->size) {
@@ -247,6 +315,50 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto DoublyLinkedList_insertAtSlot(DoublyLinkedList* self, const usize index, const usize inElementSize) -> void* {
+        if (!self || inElementSize == 0 || index > self->size) {
+            return nullptr;
+        }
+
+        // 头插，复用 pushHeadSlot
+        if (index == 0) {
+            return DoublyLinkedList_pushHeadSlot(self, inElementSize);
+        }
+
+        // 尾插，复用 pushTailSlot
+        if (index == self->size) {
+            return DoublyLinkedList_pushTailSlot(self, inElementSize);
+        }
+
+        auto* const newNode = (DoublyLinkedListNode*) malloc(sizeof(DoublyLinkedListNode));
+        if (!newNode) {
+            return nullptr;
+        }
+
+        // 分配未初始化的数据内存槽位，返回给调用者做 placement new
+        newNode->data = malloc(inElementSize);
+        if (!newNode->data) {
+            free(newNode);
+            return nullptr;
+        }
+
+        // 遍历到 index 位置的节点（目标节点）
+        auto* targetNode = self->headNode;
+        for (usize i = 0; i < index; ++i) {
+            targetNode = targetNode->nextNode;
+        }
+
+        // 新节点插入到 targetNode 之前
+        newNode->prevNode = targetNode->prevNode;
+        newNode->nextNode = targetNode;
+
+        targetNode->prevNode->nextNode = newNode;
+        targetNode->prevNode = newNode;
+
+        self->size++;
+
+        return newNode->data;
+    }
 
     auto DoublyLinkedList_popHead(DoublyLinkedList* self) -> bool {
         if (!self || self->size == 0 || !self->headNode) {
@@ -279,6 +391,35 @@ namespace Catelier::src::foundation {
 
         return true;
     }
+    auto DoublyLinkedList_popHeadSlot(DoublyLinkedList* self) -> void* {
+        if (!self || self->size == 0 || !self->headNode) {
+            return nullptr;
+        }
+
+        // 先保存下一个节点的指针
+        auto* const nextNode = self->headNode->nextNode;
+
+        // 保存头节点的数据指针，稍后返回给调用者
+        void* const data = self->headNode->data;
+
+        // 释放头节点结构体本身，但不释放数据内存
+        free(self->headNode);
+
+        // 更新头节点为下一个节点
+        self->headNode = nextNode;
+
+        if (nextNode) {
+            // 新头节点的 prev 置空
+            nextNode->prevNode = nullptr;
+        } else {
+            // 链表空了，tail 也要置空
+            self->tailNode = nullptr;
+        }
+
+        self->size--;
+
+        return data;
+    }
     auto DoublyLinkedList_popTail(DoublyLinkedList* self) -> bool {
         if (!self || self->size == 0 || !self->tailNode) {
             return false;
@@ -309,6 +450,35 @@ namespace Catelier::src::foundation {
         self->size--;
 
         return true;
+    }
+    auto DoublyLinkedList_popTailSlot(DoublyLinkedList* self) -> void* {
+        if (!self || self->size == 0 || !self->tailNode) {
+            return nullptr;
+        }
+
+        // 先保存前一个节点的指针
+        auto* const prevNode = self->tailNode->prevNode;
+
+        // 保存尾节点的数据指针，稍后返回给调用者
+        void* const data = self->tailNode->data;
+
+        // 释放尾节点结构体本身，但不释放数据内存
+        free(self->tailNode);
+
+        // 更新尾节点为前一个节点
+        self->tailNode = prevNode;
+
+        if (prevNode) {
+            // 新尾节点的 next 置空
+            prevNode->nextNode = nullptr;
+        } else {
+            // 链表空了，head 也要置空
+            self->headNode = nullptr;
+        }
+
+        self->size--;
+
+        return data;
     }
     auto DoublyLinkedList_removeAt(DoublyLinkedList* self, const usize index) -> bool {
         if (!self || index >= self->size || !self->headNode) {
@@ -346,6 +516,48 @@ namespace Catelier::src::foundation {
         self->size--;
 
         return true;
+    }
+    auto DoublyLinkedList_removeAtSlot(DoublyLinkedList* self, const usize index) -> void* {
+        if (!self || index >= self->size || !self->headNode) {
+            return nullptr;
+        }
+
+        // 目标头节点，直接复用头节点弹出槽位函数
+        if (index == 0) {
+            return DoublyLinkedList_popHeadSlot(self);
+        }
+
+        // 目标尾节点，直接复用尾节点弹出槽位函数
+        if (index == self->size - 1) {
+            return DoublyLinkedList_popTailSlot(self);
+        }
+
+        // 从头或尾出发，取近的一端遍历
+        DoublyLinkedListNode* targetNode = nullptr;
+        if (index <= self->size / 2) {
+            targetNode = self->headNode;
+            for (usize i = 0; i < index; ++i) {
+                targetNode = targetNode->nextNode;
+            }
+        } else {
+            targetNode = self->tailNode;
+            for (usize i = self->size - 1; i > index; --i) {
+                targetNode = targetNode->prevNode;
+            }
+        }
+
+        // 保存目标节点的数据指针，稍后返回给调用者
+        void* const data = targetNode->data;
+
+        // 让前驱和后继互相指向，跳过目标节点
+        targetNode->prevNode->nextNode = targetNode->nextNode;
+        targetNode->nextNode->prevNode = targetNode->prevNode;
+
+        // 释放目标节点结构体本身，但不释放数据内存
+        free(targetNode);
+        self->size--;
+
+        return data;
     }
     auto DoublyLinkedList_removeIf(DoublyLinkedList* self, const void* inData, bool (*dataEquals)(const void*, const void*)) -> bool {
         if (!self || !dataEquals || self->size == 0) {
@@ -496,6 +708,38 @@ namespace Catelier::src::foundation {
         targetNode->data = newData;
 
         return true;
+    }
+    auto DoublyLinkedList_setSlot(const DoublyLinkedList* self, const usize index, const usize inElementSize) -> void* {
+        if (!self || index >= self->size || inElementSize == 0) {
+            return nullptr;
+        }
+
+        // 从头或尾出发，取近的一端遍历
+        DoublyLinkedListNode* targetNode = nullptr;
+        if (index <= self->size / 2) {
+            targetNode = self->headNode;
+            for (usize i = 0; i < index; ++i) {
+                targetNode = targetNode->nextNode;
+            }
+        } else {
+            targetNode = self->tailNode;
+            for (usize i = self->size - 1; i > index; --i) {
+                targetNode = targetNode->prevNode;
+            }
+        }
+
+        // 释放旧数据内存（调用者已在此之前析构旧元素）
+        if (targetNode->data) {
+            free(targetNode->data);
+        }
+
+        // 分配未初始化的新数据内存槽位，返回给调用者做 placement new
+        targetNode->data = malloc(inElementSize);
+        if (!targetNode->data) {
+            return nullptr;
+        }
+
+        return targetNode->data;
     }
 
     auto DoublyLinkedList_reverse(DoublyLinkedList* self) -> bool {
