@@ -10,8 +10,6 @@ namespace Catelier::src::foundation {
         constexpr usize DEFAULT_CAPACITY = 4;
     }
 
-    // 连续字节缓冲区的数组列表
-    // 元素在内存中连续排列，elementSize 是实例级属性，构造时固定
     typedef struct ArrayList {
         u8* elements;
         usize elementSize;

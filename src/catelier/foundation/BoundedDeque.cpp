@@ -5,9 +5,6 @@
 #include "RingBuffer.hpp"
 
 namespace Catelier::src::foundation {
-    // 有界双端队列结构
-    // 内部持有 RingBuffer，所有操作都转发给它
-    // 本层只负责语义收窄，不重复实现环形逻辑
     typedef struct BoundedDeque {
         RingBuffer* buffer;
     } BoundedDeque;

@@ -10,8 +10,6 @@ namespace Catelier::src::foundation {
         constexpr usize DEFAULT_CAPACITY = 4;
     }
 
-    // 后进先出的栈结构
-    // 元素在内存中连续排列，容量可自动扩容，语义上不存在满的状态
     typedef struct Stack {
         u8* elements;
         usize elementSize;

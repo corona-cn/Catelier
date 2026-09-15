@@ -8,9 +8,8 @@ namespace Catelier::src::foundation {
         constexpr usize DEFAULT_CAPACITY = 4;
     }
 
-    // 固定容量的环形缓冲区
-    // 逻辑容量由用户指定，物理容量（隐式）是大于等于逻辑容量的最小 2 的幂
-    // 内部所有环形索引运算都用物理容量做掩码，对外只暴露逻辑容量
+    // 一个设计决策是引入物理容量和逻辑容量
+    // 使得该环形缓冲区数据容器兼具性能与可控性，也使得语义更明确
     typedef struct RingBuffer {
         u8* elements;
         usize elementSize;

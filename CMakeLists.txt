@@ -69,6 +69,12 @@ add_executable(Catelier
 	src/catelier/foundation/BoundedDeque.hpp
 	src/catelier/foundation/BoundedDeque.cpp
 	include/catelier/foundation/BoundedDeque.hpp
+	src/catelier/foundation/UnboundedQueue.hpp
+	src/catelier/foundation/UnboundedQueue.cpp
+	include/catelier/foundation/UnboundedQueue.hpp
+	src/catelier/foundation/UnboundedDeque.hpp
+	src/catelier/foundation/UnboundedDeque.cpp
+	include/catelier/foundation/UnboundedDeque.hpp
 )
 
 
