@@ -8,12 +8,12 @@
 
 namespace Catelier::foundation {
     template<typename Key>
-    u64 defaultHash(const void* key) {
+    auto defaultHash(const void* key) -> u64 {
         return src::util::hash::FNV1a::hash64Mem(key, sizeof(Key));
     }
 
     template<typename Key>
-    bool defaultKeyEquals(const void* a, const void* b) {
+    auto defaultKeyEquals(const void* a, const void* b) -> bool {
         return *((const Key*) a) == *((const Key*) b);
     }
 

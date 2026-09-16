@@ -75,6 +75,9 @@ add_executable(Catelier
 	src/catelier/foundation/UnboundedDeque.hpp
 	src/catelier/foundation/UnboundedDeque.cpp
 	include/catelier/foundation/UnboundedDeque.hpp
+	src/catelier/foundation/BinaryHeap.hpp
+	src/catelier/foundation/BinaryHeap.cpp
+	include/catelier/foundation/BinaryHeap.hpp
 )
 
 
