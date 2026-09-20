@@ -78,6 +78,9 @@ add_executable(Catelier
 	src/catelier/foundation/BinaryHeap.hpp
 	src/catelier/foundation/BinaryHeap.cpp
 	include/catelier/foundation/BinaryHeap.hpp
+	src/catelier/foundation/BinarySearchTree.hpp
+	src/catelier/foundation/BinarySearchTree.cpp
+	include/catelier/foundation/BinarySearchTree.hpp
 )
 
 

@@ -194,7 +194,7 @@ namespace Catelier::foundation {
             };
 
             explicit OpenHashMap(const usize initialCapacity = 4, u64 (*hash)(const void*) = defaultHash<Key>, bool (*keyEquals)(const void*, const void*) = defaultKeyEquals<Key>) {
-                this->handle = src::foundation::OpenHashMap_construct(initialCapacity, hash, keyEquals);
+                this->handle = src::foundation::OpenHashMap_construct(initialCapacity, sizeof(Key), sizeof(Value), hash, keyEquals);
             }
             ~OpenHashMap() {
                 if (this->handle) {
@@ -221,7 +221,7 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), defaultHash<Key>, defaultKeyEquals<Key>);
+                this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), defaultHash<Key>, defaultKeyEquals<Key>);
                 if (!this->handle) {
                     return;
                 }
@@ -238,7 +238,7 @@ namespace Catelier::foundation {
                     this->eraseAll();
 
                     if (!this->handle) {
-                        this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), defaultHash<Key>, defaultKeyEquals<Key>);
+                        this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), defaultHash<Key>, defaultKeyEquals<Key>);
                         if (!this->handle) {
                             return *this;
                         }
@@ -283,7 +283,7 @@ namespace Catelier::foundation {
                 void* oldValueSlot = nullptr;
                 void* newValueSlot = nullptr;
 
-                if (!src::foundation::OpenHashMap_insertSlot(this->handle, &key, sizeof(Key), sizeof(Value), &keySlot, &oldValueSlot, &newValueSlot)) {
+                if (!src::foundation::OpenHashMap_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
                     return false;
                 }
 
@@ -312,7 +312,7 @@ namespace Catelier::foundation {
                 void* oldValueSlot = nullptr;
                 void* newValueSlot = nullptr;
 
-                if (!src::foundation::OpenHashMap_insertSlot(this->handle, &key, sizeof(Key), sizeof(Value), &keySlot, &oldValueSlot, &newValueSlot)) {
+                if (!src::foundation::OpenHashMap_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
                     return false;
                 }
 

@@ -28,8 +28,8 @@ namespace Catelier::src::foundation {
         float loadFactor;
     } ChainHashMap;
 
-    auto ChainHashMap_construct(const usize initialCapacity, u64 (*hash)(const void*), bool (*keyEquals)(const void*, const void*)) -> ChainHashMap* {
-        if (!hash || !keyEquals) {
+    auto ChainHashMap_construct(const usize initialCapacity, const usize inKeySize, const usize inValueSize, u64 (*hash)(const void*), bool (*keyEquals)(const void*, const void*)) -> ChainHashMap* {
+        if (inKeySize == 0 || inValueSize == 0 || !hash || !keyEquals) {
             return nullptr;
         }
 
@@ -64,8 +64,8 @@ namespace Catelier::src::foundation {
 
         self->size = 0;
         self->capacity = capacity;
-        self->keySize = 0;
-        self->valueSize = 0;
+        self->keySize = inKeySize;
+        self->valueSize = inValueSize;
         self->hash = hash;
         self->keyEquals = keyEquals;
         self->loadFactor = DEFAULT_LOAD_FACTOR;
@@ -113,13 +113,10 @@ namespace Catelier::src::foundation {
             return nullptr;
         }
 
-        auto* const newSelf = ChainHashMap_construct(self->capacity, self->hash, self->keyEquals);
+        auto* const newSelf = ChainHashMap_construct(self->capacity, self->keySize, self->valueSize, self->hash, self->keyEquals);
         if (!newSelf) {
             return nullptr;
         }
-
-        newSelf->keySize = self->keySize;
-        newSelf->valueSize = self->valueSize;
 
         // 取出连续桶指针数组
         auto** const buckets = (ChainHashMapNode**) ArrayList_elements(self->buckets);
@@ -146,7 +143,7 @@ namespace Catelier::src::foundation {
                 memcpy(value, currentNode->value, self->valueSize);
 
                 // 尝试插入新的键值对，失败则释放键值对，并销毁新自身
-                if (!ChainHashMap_insert(newSelf, key, self->keySize, value, self->valueSize)) {
+                if (!ChainHashMap_insert(newSelf, key, value)) {
                     free(key);
                     free(value);
                     ChainHashMap_destruct(newSelf);
@@ -191,8 +188,8 @@ namespace Catelier::src::foundation {
         return newSelf;
     }
 
-    auto ChainHashMap_insert(ChainHashMap* self, const void* inKey, const usize inKeySize, const void* inValue, const usize inValueSize) -> bool {
-        if (!self || !inKey || inKeySize == 0 || !inValue || inValueSize == 0) {
+    auto ChainHashMap_insert(ChainHashMap* self, const void* inKey, const void* inValue) -> bool {
+        if (!self || !inKey || !inValue) {
             return false;
         }
 
@@ -223,16 +220,11 @@ namespace Catelier::src::foundation {
                 }
 
                 // 分配并复制新值内存
-                currentNode->value = malloc(inValueSize);
+                currentNode->value = malloc(self->valueSize);
                 if (!currentNode->value) {
                     return false;
                 }
-                memcpy(currentNode->value, inValue, inValueSize);
-
-                // 如果新值更大，更新 valueSize
-                if (inValueSize > self->valueSize) {
-                    self->valueSize = inValueSize;
-                }
+                memcpy(currentNode->value, inValue, self->valueSize);
 
                 return true;
             }
@@ -248,21 +240,21 @@ namespace Catelier::src::foundation {
         }
 
         // 分配并复制键内存
-        newNode->key = malloc(inKeySize);
+        newNode->key = malloc(self->keySize);
         if (!newNode->key) {
             free(newNode);
             return false;
         }
-        memcpy(newNode->key, inKey, inKeySize);
+        memcpy(newNode->key, inKey, self->keySize);
 
         // 分配并复制值内存
-        newNode->value = malloc(inValueSize);
+        newNode->value = malloc(self->valueSize);
         if (!newNode->value) {
             free(newNode->key);
             free(newNode);
             return false;
         }
-        memcpy(newNode->value, inValue, inValueSize);
+        memcpy(newNode->value, inValue, self->valueSize);
 
         // 将新节点指向原头节点
         newNode->nextNode = *(buckets + index);
@@ -272,13 +264,11 @@ namespace Catelier::src::foundation {
 
         // 更新状态
         self->size++;
-        self->keySize = inKeySize;
-        self->valueSize = inValueSize;
 
         return true;
     }
-    auto ChainHashMap_insertSlot(ChainHashMap* self, const void* inKey, const usize inKeySize, const usize inValueSize, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool {
-        if (!self || !inKey || inKeySize == 0 || !keySlotOut || !oldValueSlotOut || !newValueSlotOut) {
+    auto ChainHashMap_insertSlot(ChainHashMap* self, const void* inKey, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool {
+        if (!self || !inKey || !keySlotOut || !oldValueSlotOut || !newValueSlotOut) {
             return false;
         }
 
@@ -314,16 +304,12 @@ namespace Catelier::src::foundation {
                 *oldValueSlotOut = currentNode->value;
 
                 // 分配新的 value 内存
-                void* const newValue = malloc(inValueSize);
+                void* const newValue = malloc(self->valueSize);
                 if (!newValue) {
                     return false;
                 }
 
                 currentNode->value = newValue;
-
-                if (inValueSize > self->valueSize) {
-                    self->valueSize = inValueSize;
-                }
 
                 // key 已存在，不需要重新构造 key；调用者只需构造新 value
                 *newValueSlotOut = newValue;
@@ -342,13 +328,13 @@ namespace Catelier::src::foundation {
         }
 
         // 分配 key 和 value 的未初始化内存，交给调用者做 placement new
-        newNode->key = malloc(inKeySize);
+        newNode->key = malloc(self->keySize);
         if (!newNode->key) {
             free(newNode);
             return false;
         }
 
-        newNode->value = malloc(inValueSize);
+        newNode->value = malloc(self->valueSize);
         if (!newNode->value) {
             free(newNode->key);
             free(newNode);
@@ -363,8 +349,6 @@ namespace Catelier::src::foundation {
 
         // 更新状态
         self->size++;
-        self->keySize = inKeySize;
-        self->valueSize = inValueSize;
 
         // key 和 value 都是全新的，都需要调用者构造
         *keySlotOut = newNode->key;
@@ -551,8 +535,6 @@ namespace Catelier::src::foundation {
 
         // 更新状态
         self->size = 0;
-        self->keySize = 0;
-        self->valueSize = 0;
 
         return true;
     }

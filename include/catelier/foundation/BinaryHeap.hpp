@@ -6,20 +6,20 @@
 
 namespace Catelier::foundation {
     template<typename Type>
-    struct LessComparator {
+    struct AscendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a < b;
         }
     };
 
     template<typename Type>
-    struct GreaterComparator {
+    struct DescendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a > b;
         }
     };
 
-    template<typename Type, typename Compare = GreaterComparator<Type>>
+    template<typename Type, typename Compare = AscendingComparator<Type>>
     class BinaryHeap {
         public:
             class Iterator {

@@ -4,14 +4,14 @@
 namespace Catelier::src::foundation {
     typedef struct OpenHashMap OpenHashMap;
 
-    auto OpenHashMap_construct(usize initialCapacity, u64 (*hash)(const void* key), bool (*keyEquals)(const void* a, const void* b)) -> OpenHashMap*;
+    auto OpenHashMap_construct(usize initialCapacity, usize inKeySize, usize inValueSize, u64 (*hash)(const void* key), bool (*keyEquals)(const void* a, const void* b)) -> OpenHashMap*;
     auto OpenHashMap_destruct(OpenHashMap* self) -> bool;
 
     auto OpenHashMap_copy(const OpenHashMap* self) -> OpenHashMap*;
     auto OpenHashMap_move(OpenHashMap* self) -> OpenHashMap*;
 
-    auto OpenHashMap_insert(OpenHashMap* self, const void* inKey, usize inKeySize, const void* inValue, usize inValueSize) -> bool;
-    auto OpenHashMap_insertSlot(OpenHashMap* self, const void* inKey, usize inKeySize, usize inValueSize, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool;
+    auto OpenHashMap_insert(OpenHashMap* self, const void* inKey, const void* inValue) -> bool;
+    auto OpenHashMap_insertSlot(OpenHashMap* self, const void* inKey, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool;
 
     auto OpenHashMap_vacate(OpenHashMap* self, const void* inKey) -> bool;
     auto OpenHashMap_vacateSlot(OpenHashMap* self, const void* inKey, void** keySlotOut, void** valueSlotOut) -> bool;

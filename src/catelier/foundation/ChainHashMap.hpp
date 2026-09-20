@@ -6,14 +6,14 @@ namespace Catelier::src::foundation {
 
     typedef struct ChainHashMapNode ChainHashMapNode;
 
-    auto ChainHashMap_construct(usize initialCapacity, u64 (*hash)(const void*), bool (*keyEquals)(const void*, const void*)) -> ChainHashMap*;
+    auto ChainHashMap_construct(usize initialCapacity, usize inKeySize, usize inValueSize, u64 (*hash)(const void*), bool (*keyEquals)(const void*, const void*)) -> ChainHashMap*;
     auto ChainHashMap_destruct(ChainHashMap* self) -> bool;
 
     auto ChainHashMap_copy(const ChainHashMap* self) -> ChainHashMap*;
     auto ChainHashMap_move(ChainHashMap* self) -> ChainHashMap*;
 
-    auto ChainHashMap_insert(ChainHashMap* self, const void* inKey, usize inKeySize, const void* inValue, usize inValueSize) -> bool;
-    auto ChainHashMap_insertSlot(ChainHashMap* self, const void* inKey, usize inKeySize, usize inValueSize, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool;
+    auto ChainHashMap_insert(ChainHashMap* self, const void* inKey, const void* inValue) -> bool;
+    auto ChainHashMap_insertSlot(ChainHashMap* self, const void* inKey, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool;
 
     auto ChainHashMap_remove(ChainHashMap* self, const void* inKey) -> bool;
     auto ChainHashMap_removeSlot(ChainHashMap* self, const void* inKey, void** keySlotOut, void** valueSlotOut) -> bool;
