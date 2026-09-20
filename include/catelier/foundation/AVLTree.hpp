@@ -2,7 +2,7 @@
 #include <new>
 #include <utility>
 
-#include "../../../src/catelier/foundation/BinarySearchTree.hpp"
+#include "../../../src/catelier/foundation/AVLTree.hpp"
 
 namespace Catelier::foundation {
     template<typename Type>
@@ -20,27 +20,27 @@ namespace Catelier::foundation {
     };
 
     template<typename Key, typename Value, typename Compare = AscendingComparator<Key>>
-    class BinarySearchTree {
+    class AVLTree {
         public:
             class Iterator {
                 public:
-                    explicit Iterator(src::foundation::BinarySearchTree* handle = nullptr, src::foundation::BinarySearchTreeNode* node = nullptr) {
+                    explicit Iterator(src::foundation::AVLTree* handle = nullptr, src::foundation::AVLTreeNode* node = nullptr) {
                         this->handle = handle;
                         this->node = node;
                     }
 
                     auto key() -> Key& {
-                        return *((Key*) src::foundation::BinarySearchTreeNode_key(this->node));
+                        return *((Key*) src::foundation::AVLTreeNode_key(this->node));
                     }
                     auto value() -> Value& {
-                        return *((Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
 
                     auto operator * () -> Value& {
-                        return *((Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
                     auto operator -> () -> Value* {
-                        return (Value*) src::foundation::BinarySearchTreeNode_value(this->node);
+                        return (Value*) src::foundation::AVLTreeNode_value(this->node);
                     }
 
                     auto operator ++ () -> Iterator& {
@@ -48,8 +48,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findSuccessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findSuccessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -63,8 +63,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findPredecessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findPredecessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -82,29 +82,29 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    src::foundation::BinarySearchTree* handle;
-                    src::foundation::BinarySearchTreeNode* node;
+                    src::foundation::AVLTree* handle;
+                    src::foundation::AVLTreeNode* node;
             };
 
             class ConstIterator {
                 public:
-                    explicit ConstIterator(const src::foundation::BinarySearchTree* handle = nullptr, const src::foundation::BinarySearchTreeNode* node = nullptr) {
+                    explicit ConstIterator(const src::foundation::AVLTree* handle = nullptr, const src::foundation::AVLTreeNode* node = nullptr) {
                         this->handle = handle;
                         this->node = node;
                     }
 
                     auto key() const -> const Key& {
-                        return *((const Key*) src::foundation::BinarySearchTreeNode_key(this->node));
+                        return *((const Key*) src::foundation::AVLTreeNode_key(this->node));
                     }
                     auto value() const -> const Value& {
-                        return *((const Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((const Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
 
                     auto operator * () const -> const Value& {
-                        return *((const Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((const Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
                     auto operator -> () const -> const Value* {
-                        return (const Value*) src::foundation::BinarySearchTreeNode_value(this->node);
+                        return (const Value*) src::foundation::AVLTreeNode_value(this->node);
                     }
 
                     auto operator ++ () -> ConstIterator& {
@@ -112,8 +112,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findSuccessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findSuccessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -127,8 +127,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findPredecessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findPredecessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -146,29 +146,29 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    const src::foundation::BinarySearchTree* handle;
-                    const src::foundation::BinarySearchTreeNode* node;
+                    const src::foundation::AVLTree* handle;
+                    const src::foundation::AVLTreeNode* node;
             };
 
             class ReverseIterator {
                 public:
-                    explicit ReverseIterator(src::foundation::BinarySearchTree* handle = nullptr, src::foundation::BinarySearchTreeNode* node = nullptr) {
+                    explicit ReverseIterator(src::foundation::AVLTree* handle = nullptr, src::foundation::AVLTreeNode* node = nullptr) {
                         this->handle = handle;
                         this->node = node;
                     }
 
                     auto key() -> Key& {
-                        return *((Key*) src::foundation::BinarySearchTreeNode_key(this->node));
+                        return *((Key*) src::foundation::AVLTreeNode_key(this->node));
                     }
                     auto value() -> Value& {
-                        return *((Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
 
                     auto operator * () -> Value& {
-                        return *((Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
                     auto operator -> () -> Value* {
-                        return (Value*) src::foundation::BinarySearchTreeNode_value(this->node);
+                        return (Value*) src::foundation::AVLTreeNode_value(this->node);
                     }
 
                     auto operator ++ () -> ReverseIterator& {
@@ -176,8 +176,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findPredecessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findPredecessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -191,8 +191,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findSuccessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findSuccessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -210,29 +210,29 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    src::foundation::BinarySearchTree* handle;
-                    src::foundation::BinarySearchTreeNode* node;
+                    src::foundation::AVLTree* handle;
+                    src::foundation::AVLTreeNode* node;
             };
 
             class ConstReverseIterator {
                 public:
-                    explicit ConstReverseIterator(const src::foundation::BinarySearchTree* handle = nullptr, const src::foundation::BinarySearchTreeNode* node = nullptr) {
+                    explicit ConstReverseIterator(const src::foundation::AVLTree* handle = nullptr, const src::foundation::AVLTreeNode* node = nullptr) {
                         this->handle = handle;
                         this->node = node;
                     }
 
                     auto key() const -> const Key& {
-                        return *((const Key*) src::foundation::BinarySearchTreeNode_key(this->node));
+                        return *((const Key*) src::foundation::AVLTreeNode_key(this->node));
                     }
                     auto value() const -> const Value& {
-                        return *((const Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((const Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
 
                     auto operator * () const -> const Value& {
-                        return *((const Value*) src::foundation::BinarySearchTreeNode_value(this->node));
+                        return *((const Value*) src::foundation::AVLTreeNode_value(this->node));
                     }
                     auto operator -> () const -> const Value* {
-                        return (const Value*) src::foundation::BinarySearchTreeNode_value(this->node);
+                        return (const Value*) src::foundation::AVLTreeNode_value(this->node);
                     }
 
                     auto operator ++ () -> ConstReverseIterator& {
@@ -240,8 +240,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findPredecessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findPredecessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -255,8 +255,8 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BinarySearchTreeNode_key(this->node);
-                        this->node = src::foundation::BinarySearchTree_findSuccessorNode(this->handle, currentKey);
+                        const void* const currentKey = src::foundation::AVLTreeNode_key(this->node);
+                        this->node = src::foundation::AVLTree_findSuccessorNode(this->handle, currentKey);
 
                         return *this;
                     }
@@ -274,30 +274,30 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    const src::foundation::BinarySearchTree* handle;
-                    const src::foundation::BinarySearchTreeNode* node;
+                    const src::foundation::AVLTree* handle;
+                    const src::foundation::AVLTreeNode* node;
             };
 
-            explicit BinarySearchTree() {
-                this->handle = src::foundation::BinarySearchTree_construct(sizeof(Key), sizeof(Value), compareBridge);
+            explicit AVLTree() {
+                this->handle = src::foundation::AVLTree_construct(sizeof(Key), sizeof(Value), compareBridge);
             }
-            ~BinarySearchTree() {
+            ~AVLTree() {
                 if (this->handle) {
-                    destructSubtreeElements(src::foundation::BinarySearchTree_rootNode(this->handle));
+                    destructSubtreeElements(src::foundation::AVLTree_rootNode(this->handle));
 
-                    src::foundation::BinarySearchTree_destruct(this->handle);
+                    src::foundation::AVLTree_destruct(this->handle);
 
                     this->handle = nullptr;
                 }
             }
 
-            BinarySearchTree(const BinarySearchTree& other) {
+            AVLTree(const AVLTree& other) {
                 if (!other.handle) {
                     this->handle = nullptr;
                     return;
                 }
 
-                this->handle = src::foundation::BinarySearchTree_construct(sizeof(Key), sizeof(Value), compareBridge);
+                this->handle = src::foundation::AVLTree_construct(sizeof(Key), sizeof(Value), compareBridge);
                 if (!this->handle) {
                     return;
                 }
@@ -306,15 +306,15 @@ namespace Catelier::foundation {
                     this->insert(key, value);
                 });
             }
-            BinarySearchTree(BinarySearchTree&& other) noexcept {
-                this->handle = src::foundation::BinarySearchTree_move(other.handle);
+            AVLTree(AVLTree&& other) noexcept {
+                this->handle = src::foundation::AVLTree_move(other.handle);
             }
-            BinarySearchTree& operator = (const BinarySearchTree& other) {
+            AVLTree& operator = (const AVLTree& other) {
                 if (this != &other) {
                     this->clear();
 
                     if (!this->handle) {
-                        this->handle = src::foundation::BinarySearchTree_construct(sizeof(Key), sizeof(Value), compareBridge);
+                        this->handle = src::foundation::AVLTree_construct(sizeof(Key), sizeof(Value), compareBridge);
                         if (!this->handle) {
                             return *this;
                         }
@@ -327,15 +327,15 @@ namespace Catelier::foundation {
 
                 return *this;
             }
-            BinarySearchTree& operator = (BinarySearchTree&& other) noexcept {
+            AVLTree& operator = (AVLTree&& other) noexcept {
                 if (this != &other) {
                     if (this->handle) {
-                        destructSubtreeElements(src::foundation::BinarySearchTree_rootNode(this->handle));
+                        destructSubtreeElements(src::foundation::AVLTree_rootNode(this->handle));
 
-                        src::foundation::BinarySearchTree_destruct(this->handle);
+                        src::foundation::AVLTree_destruct(this->handle);
                     }
 
-                    this->handle = src::foundation::BinarySearchTree_move(other.handle);
+                    this->handle = src::foundation::AVLTree_move(other.handle);
                 }
 
                 return *this;
@@ -350,7 +350,7 @@ namespace Catelier::foundation {
                 void* oldValueSlot = nullptr;
                 void* newValueSlot = nullptr;
 
-                if (!src::foundation::BinarySearchTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
+                if (!src::foundation::AVLTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
                     return false;
                 }
 
@@ -376,7 +376,7 @@ namespace Catelier::foundation {
                 void* oldValueSlot = nullptr;
                 void* newValueSlot = nullptr;
 
-                if (!src::foundation::BinarySearchTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
+                if (!src::foundation::AVLTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
                     return false;
                 }
 
@@ -402,7 +402,7 @@ namespace Catelier::foundation {
                 void* keySlot = nullptr;
                 void* valueSlot = nullptr;
 
-                if (!src::foundation::BinarySearchTree_removeSlot(this->handle, &key, &keySlot, &valueSlot)) {
+                if (!src::foundation::AVLTree_removeSlot(this->handle, &key, &keySlot, &valueSlot)) {
                     return false;
                 }
 
@@ -419,16 +419,16 @@ namespace Catelier::foundation {
                     return false;
                 }
 
-                destructSubtreeElements(src::foundation::BinarySearchTree_rootNode(this->handle));
+                destructSubtreeElements(src::foundation::AVLTree_rootNode(this->handle));
 
-                return src::foundation::BinarySearchTree_clear(this->handle);
+                return src::foundation::AVLTree_clear(this->handle);
             }
 
             auto find(const Key& key) -> Value* {
-                return (Value*) src::foundation::BinarySearchTree_find(this->handle, &key);
+                return (Value*) src::foundation::AVLTree_find(this->handle, &key);
             }
             auto find(const Key& key) const -> const Value* {
-                return (const Value*) src::foundation::BinarySearchTree_find(this->handle, &key);
+                return (const Value*) src::foundation::AVLTree_find(this->handle, &key);
             }
             auto operator[](const Key& key) -> Value& {
                 Value* const value = find(key);
@@ -456,10 +456,10 @@ namespace Catelier::foundation {
             }
 
             auto begin() -> Iterator {
-                return Iterator(this->handle, src::foundation::BinarySearchTree_minNode(this->handle));
+                return Iterator(this->handle, src::foundation::AVLTree_minNode(this->handle));
             }
             auto begin() const -> ConstIterator {
-                return ConstIterator(this->handle, src::foundation::BinarySearchTree_minNode(this->handle));
+                return ConstIterator(this->handle, src::foundation::AVLTree_minNode(this->handle));
             }
             auto end() -> Iterator {
                 return Iterator(this->handle, nullptr);
@@ -469,10 +469,10 @@ namespace Catelier::foundation {
             }
 
             auto reverseBegin() -> ReverseIterator {
-                return ReverseIterator(this->handle, src::foundation::BinarySearchTree_maxNode(this->handle));
+                return ReverseIterator(this->handle, src::foundation::AVLTree_maxNode(this->handle));
             }
             auto reverseBegin() const -> ConstReverseIterator {
-                return ConstReverseIterator(this->handle, src::foundation::BinarySearchTree_maxNode(this->handle));
+                return ConstReverseIterator(this->handle, src::foundation::AVLTree_maxNode(this->handle));
             }
             auto reverseEnd() -> ReverseIterator {
                 return ReverseIterator(this->handle, nullptr);
@@ -481,25 +481,28 @@ namespace Catelier::foundation {
                 return ConstReverseIterator(this->handle, nullptr);
             }
 
+            auto height() const -> i32 {
+                return this->handle ? src::foundation::AVLTree_height(this->handle) : 0;
+            }
             auto keySize() const -> usize {
-                return this->handle ? src::foundation::BinarySearchTree_keySize(this->handle) : 0;
+                return this->handle ? src::foundation::AVLTree_keySize(this->handle) : 0;
             }
             auto valueSize() const -> usize {
-                return this->handle ? src::foundation::BinarySearchTree_valueSize(this->handle) : 0;
+                return this->handle ? src::foundation::AVLTree_valueSize(this->handle) : 0;
             }
             auto size() const -> usize {
-                return this->handle ? src::foundation::BinarySearchTree_size(this->handle) : 0;
+                return this->handle ? src::foundation::AVLTree_size(this->handle) : 0;
             }
 
             auto isEmpty() const -> bool {
-                return this->handle ? src::foundation::BinarySearchTree_isEmpty(this->handle) : true;
+                return this->handle ? src::foundation::AVLTree_isEmpty(this->handle) : true;
             }
             auto contains(const Key& key) const -> bool {
-                return src::foundation::BinarySearchTree_contains(this->handle, &key);
+                return src::foundation::AVLTree_contains(this->handle, &key);
             }
 
         private:
-            src::foundation::BinarySearchTree* handle = nullptr;
+            src::foundation::AVLTree* handle = nullptr;
 
             static auto compareBridge(const void* a, const void* b) -> i32 {
                 if (Compare{}(*((const Key*) a), *((const Key*) b))) {
@@ -513,16 +516,16 @@ namespace Catelier::foundation {
                 return 0;
             }
 
-            static auto destructSubtreeElements(const src::foundation::BinarySearchTreeNode* node) -> void {
+            static auto destructSubtreeElements(const src::foundation::AVLTreeNode* node) -> void {
                 if (!node) {
                     return;
                 }
 
-                destructSubtreeElements(src::foundation::BinarySearchTreeNode_left(node));
-                destructSubtreeElements(src::foundation::BinarySearchTreeNode_right(node));
+                destructSubtreeElements(src::foundation::AVLTreeNode_left(node));
+                destructSubtreeElements(src::foundation::AVLTreeNode_right(node));
 
-                ((Key*) src::foundation::BinarySearchTreeNode_key(node))->~Key();
-                ((Value*) src::foundation::BinarySearchTreeNode_value(node))->~Value();
+                ((Key*) src::foundation::AVLTreeNode_key(node))->~Key();
+                ((Value*) src::foundation::AVLTreeNode_value(node))->~Value();
             }
     };
 }

@@ -81,6 +81,9 @@ add_executable(Catelier
 	src/catelier/foundation/BinarySearchTree.hpp
 	src/catelier/foundation/BinarySearchTree.cpp
 	include/catelier/foundation/BinarySearchTree.hpp
+	src/catelier/foundation/AVLTree.hpp
+	src/catelier/foundation/AVLTree.cpp
+	include/catelier/foundation/AVLTree.hpp
 )
 
 

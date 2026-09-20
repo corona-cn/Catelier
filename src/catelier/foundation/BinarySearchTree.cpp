@@ -412,7 +412,7 @@ namespace Catelier::src::foundation {
             transplant(self, parentNode, currentNode, currentNode->leftChild);
         } else {
             // 有两个子节点情况（参考 CLRS 的 TREE-DELETE 实现，区别在于当前实现中节点没有父指针，需要显式追踪父节点）
-            // 找中序后继节点：即找右子树的最左节点（左小右大，左 → 根 → 右），并用其来替代当前节点
+            // 找中序后继节点，即找右子树的最左节点（左小右大，左 → 根 → 右），并用其来替代当前节点
             auto* successorParent = currentNode;
             auto* successorNode = currentNode->rightChild;
 
@@ -492,7 +492,7 @@ namespace Catelier::src::foundation {
             transplant(self, parentNode, currentNode, currentNode->leftChild);
         } else {
             // 有两个子节点情况（参考 CLRS 的 TREE-DELETE 实现，区别在于当前实现中节点没有父指针，需要显式追踪父节点）
-            // 找中序后继节点：即找右子树的最左节点（左小右大），并用其来替代当前节点
+            // 找中序后继节点，即找右子树的最左节点（左小右大），并用其来替代当前节点
             auto* successorParent = currentNode;
             auto* successorNode = currentNode->rightChild;
 
