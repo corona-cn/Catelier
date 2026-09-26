@@ -25,45 +25,45 @@ namespace Catelier::src::foundation {
     } AVLTree;
 
     namespace {
-        auto destructSubtree(AVLTreeNode* node) -> void {
-            if (!node) {
+        auto destructNode(const AVLTree* self, AVLTreeNode* subtreeRoot) -> void {
+            if (!subtreeRoot) {
                 return;
             }
 
-            destructSubtree(node->leftChild);
-            destructSubtree(node->rightChild);
+            destructNode(self, subtreeRoot->leftChild);
+            destructNode(self, subtreeRoot->rightChild);
 
-            if (node->key) {
-                free(node->key);
+            if (subtreeRoot->key) {
+                free(subtreeRoot->key);
             }
 
-            if (node->value) {
-                free(node->value);
+            if (subtreeRoot->value) {
+                free(subtreeRoot->value);
             }
 
-            free(node);
+            free(subtreeRoot);
         }
-        auto copySubtree(const AVLTree* self, const AVLTreeNode* node) -> AVLTreeNode* {
-            if (!node) {
+        auto copyNode(const AVLTree* self, const AVLTreeNode* sourceNode) -> AVLTreeNode* {
+            if (!sourceNode) {
                 return nullptr;
             }
 
             // 递归复制左右子树
-            auto* const newLeft = copySubtree(self, node->leftChild);
-            if (node->leftChild && !newLeft) {
+            auto* const newLeft = copyNode(self, sourceNode->leftChild);
+            if (sourceNode->leftChild && !newLeft) {
                 return nullptr;
             }
 
-            auto* const newRight = copySubtree(self, node->rightChild);
-            if (node->rightChild && !newRight) {
-                destructSubtree(newLeft);
+            auto* const newRight = copyNode(self, sourceNode->rightChild);
+            if (sourceNode->rightChild && !newRight) {
+                destructNode(self, newLeft);
                 return nullptr;
             }
 
             auto* const newNode = (AVLTreeNode*) malloc(sizeof(AVLTreeNode));
             if (!newNode) {
-                destructSubtree(newLeft);
-                destructSubtree(newRight);
+                destructNode(self, newLeft);
+                destructNode(self, newRight);
                 return nullptr;
             }
 
@@ -71,117 +71,60 @@ namespace Catelier::src::foundation {
             newNode->key = malloc(self->keySize);
             if (!newNode->key) {
                 free(newNode);
-                destructSubtree(newLeft);
-                destructSubtree(newRight);
+                destructNode(self, newLeft);
+                destructNode(self, newRight);
                 return nullptr;
             }
-            memcpy(newNode->key, node->key, self->keySize);
+            memcpy(newNode->key, sourceNode->key, self->keySize);
 
             // 分配并复制值内存
             newNode->value = malloc(self->valueSize);
             if (!newNode->value) {
                 free(newNode->key);
                 free(newNode);
-                destructSubtree(newLeft);
-                destructSubtree(newRight);
+                destructNode(self, newLeft);
+                destructNode(self, newRight);
                 return nullptr;
             }
-            memcpy(newNode->value, node->value, self->valueSize);
+            memcpy(newNode->value, sourceNode->value, self->valueSize);
 
             newNode->leftChild = newLeft;
             newNode->rightChild = newRight;
 
             // 复制高度字段，保持与原树一致
-            newNode->height = node->height;
-
-            return newNode;
-        }
-
-        auto createEmptyNode(const AVLTree* self) -> AVLTreeNode* {
-            auto* const newNode = (AVLTreeNode*) malloc(sizeof(AVLTreeNode));
-            if (!newNode) {
-                return nullptr;
-            }
-
-            newNode->key = malloc(self->keySize);
-            if (!newNode->key) {
-                free(newNode);
-                return nullptr;
-            }
-
-            newNode->value = malloc(self->valueSize);
-            if (!newNode->value) {
-                free(newNode->key);
-                free(newNode);
-                return nullptr;
-            }
-
-            newNode->leftChild = nullptr;
-            newNode->rightChild = nullptr;
-            newNode->height = 0;
-
-            return newNode;
-        }
-        auto createFilledNode(const AVLTree* self, const void* inKey, const void* inValue) -> AVLTreeNode* {
-            auto* const newNode = (AVLTreeNode*) malloc(sizeof(AVLTreeNode));
-            if (!newNode) {
-                return nullptr;
-            }
-
-            newNode->key = malloc(self->keySize);
-            if (!newNode->key) {
-                free(newNode);
-                return nullptr;
-            }
-            memcpy(newNode->key, inKey, self->keySize);
-
-            newNode->value = malloc(self->valueSize);
-            if (!newNode->value) {
-                free(newNode->key);
-                free(newNode);
-                return nullptr;
-            }
-            memcpy(newNode->value, inValue, self->valueSize);
-
-            newNode->leftChild = nullptr;
-            newNode->rightChild = nullptr;
-            newNode->height = 0;
+            newNode->height = sourceNode->height;
 
             return newNode;
         }
     }
 
     namespace {
-        auto heightOf(const AVLTreeNode* node) -> i32 {
-            if (!node) {
-                return EMPTY_NODE_HEIGHT;
-            }
-
-            return node->height;
-        }
-        auto updateHeight(AVLTreeNode* node) -> void {
+        auto updateHeight(const AVLTree* self, AVLTreeNode* node) -> void {
             if (!node) {
                 return;
             }
 
-            const i32 leftHeight = heightOf(node->leftChild);
-            const i32 rightHeight = heightOf(node->rightChild);
+            const i32 leftHeight = node->leftChild ? node->leftChild->height : EMPTY_NODE_HEIGHT;
+            const i32 rightHeight = node->rightChild ? node->rightChild->height : EMPTY_NODE_HEIGHT;
 
             node->height = 1 + (leftHeight > rightHeight ? leftHeight : rightHeight);
         }
 
-        auto balanceFactorOf(const AVLTreeNode* node) -> i32 {
+        auto balanceFactorOf(const AVLTree* self, const AVLTreeNode* node) -> i32 {
             if (!node) {
                 return 0;
             }
 
+            const i32 leftHeight = node->leftChild ? node->leftChild->height : EMPTY_NODE_HEIGHT;
+            const i32 rightHeight = node->rightChild ? node->rightChild->height : EMPTY_NODE_HEIGHT;
+
             // 计算节点平衡因子：左子树高度 - 右子树高度
             // 平衡节点的平衡因子 ∈ {-1, 0, 1}
             // 不平衡节点的平衡因子为 ±2
-            return heightOf(node->leftChild) - heightOf(node->rightChild);
+            return leftHeight - rightHeight;
         }
 
-        auto rotateLeft(AVLTreeNode* node) -> AVLTreeNode* {
+        auto rotateLeft(const AVLTree* self, AVLTreeNode* node) -> AVLTreeNode* {
             auto* const newRootNode = node->rightChild;
 
             node->rightChild = newRootNode->leftChild;
@@ -189,12 +132,12 @@ namespace Catelier::src::foundation {
             newRootNode->leftChild = node;
 
             // 先更新节点的高度，再更新新根节点的高度
-            updateHeight(node);
-            updateHeight(newRootNode);
+            updateHeight(self, node);
+            updateHeight(self, newRootNode);
 
             return newRootNode;
         }
-        auto rotateRight(AVLTreeNode* node) -> AVLTreeNode* {
+        auto rotateRight(const AVLTree* self, AVLTreeNode* node) -> AVLTreeNode* {
             auto* const newRootNode = node->leftChild;
 
             node->leftChild = newRootNode->rightChild;
@@ -202,43 +145,43 @@ namespace Catelier::src::foundation {
             newRootNode->rightChild = node;
 
             // 先更新节点的高度，再更新新根节点的高度
-            updateHeight(node);
-            updateHeight(newRootNode);
+            updateHeight(self, node);
+            updateHeight(self, newRootNode);
 
             return newRootNode;
         }
 
-        auto rebalance(AVLTreeNode* node) -> AVLTreeNode* {
+        auto rebalance(const AVLTree* self, AVLTreeNode* node) -> AVLTreeNode* {
             // 更新节点高度
-            updateHeight(node);
+            updateHeight(self, node);
 
             // 计算平衡因子
-            const i32 factor = balanceFactorOf(node);
+            const i32 factor = balanceFactorOf(self, node);
 
             // 左子树过高
             if (factor > 1) {
                 // LL 情况，右旋
-                if (balanceFactorOf(node->leftChild) >= 0) {
-                    return rotateRight(node);
+                if (balanceFactorOf(self, node->leftChild) >= 0) {
+                    return rotateRight(self, node);
                 }
 
                 // LR 情况，先左旋左子转为 LL，再右旋当前节点
-                node->leftChild = rotateLeft(node->leftChild);
+                node->leftChild = rotateLeft(self, node->leftChild);
 
-                return rotateRight(node);
+                return rotateRight(self, node);
             }
 
             // 右子树过高
             if (factor < -1) {
                 // RR 情况，左旋
-                if (balanceFactorOf(node->rightChild) <= 0) {
-                    return rotateLeft(node);
+                if (balanceFactorOf(self, node->rightChild) <= 0) {
+                    return rotateLeft(self, node);
                 }
 
                 // RL 情况，先右旋右子转为 RR，再左旋当前节点
-                node->rightChild = rotateRight(node->rightChild);
+                node->rightChild = rotateRight(self, node->rightChild);
 
-                return rotateLeft(node);
+                return rotateLeft(self, node);
             }
 
             return node;
@@ -269,7 +212,7 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        destructSubtree(self->rootNode);
+        destructNode(self, self->rootNode);
 
         free(self);
 
@@ -287,7 +230,7 @@ namespace Catelier::src::foundation {
         }
 
         // 递归复制整棵树，保持原有树形结构与高度字段
-        newSelf->rootNode = copySubtree(newSelf, self->rootNode);
+        newSelf->rootNode = copyNode(newSelf, self->rootNode);
         if (self->rootNode && !newSelf->rootNode) {
             AVLTree_destruct(newSelf);
             return nullptr;
@@ -364,10 +307,29 @@ namespace Catelier::src::foundation {
         }
 
         // 创建新节点并挂到空位
-        auto* const newNode = createFilledNode(self, inKey, inValue);
+        auto* const newNode = (AVLTreeNode*) malloc(sizeof(AVLTreeNode));
         if (!newNode) {
             return false;
         }
+
+        newNode->key = malloc(self->keySize);
+        if (!newNode->key) {
+            free(newNode);
+            return false;
+        }
+        memcpy(newNode->key, inKey, self->keySize);
+
+        newNode->value = malloc(self->valueSize);
+        if (!newNode->value) {
+            free(newNode->key);
+            free(newNode);
+            return false;
+        }
+        memcpy(newNode->value, inValue, self->valueSize);
+
+        newNode->leftChild = nullptr;
+        newNode->rightChild = nullptr;
+        newNode->height = 0;
 
         *nodePtr = newNode;
         self->size++;
@@ -375,7 +337,7 @@ namespace Catelier::src::foundation {
         // 向上回溯：从下往上更新高度并检查平衡
         while (stackSize > 0) {
             auto* const node = pathStack[--stackSize];
-            auto* const newRootNode = rebalance(node);
+            auto* const newRootNode = rebalance(self, node);
 
             if (stackSize > 0) {
                 // 把旋转后的新根挂回父节点
@@ -441,10 +403,27 @@ namespace Catelier::src::foundation {
         }
 
         // 创建新节点并挂到空位
-        auto* const newNode = createEmptyNode(self);
+        auto* const newNode = (AVLTreeNode*) malloc(sizeof(AVLTreeNode));
         if (!newNode) {
             return false;
         }
+
+        newNode->key = malloc(self->keySize);
+        if (!newNode->key) {
+            free(newNode);
+            return false;
+        }
+
+        newNode->value = malloc(self->valueSize);
+        if (!newNode->value) {
+            free(newNode->key);
+            free(newNode);
+            return false;
+        }
+
+        newNode->leftChild = nullptr;
+        newNode->rightChild = nullptr;
+        newNode->height = 0;
 
         *nodePtr = newNode;
         self->size++;
@@ -456,7 +435,7 @@ namespace Catelier::src::foundation {
         // 向上回溯：从下往上更新高度并检查平衡
         while (stackSize > 0) {
             auto* const node = pathStack[--stackSize];
-            auto* const newRootNode = rebalance(node);
+            auto* const newRootNode = rebalance(self, node);
 
             if (stackSize > 0) {
                 // 把旋转后的新根挂回父节点
@@ -592,7 +571,7 @@ namespace Catelier::src::foundation {
         // 删除可能触发多次旋转，必须一直回溯到根
         while (stackSize > 0) {
             auto* const node = pathStack[--stackSize];
-            auto* const newRootNode = rebalance(node);
+            auto* const newRootNode = rebalance(self, node);
 
             if (stackSize > 0) {
                 // 把旋转后的新根挂回父节点
@@ -706,7 +685,7 @@ namespace Catelier::src::foundation {
         // 向上回溯：从下往上更新高度并检查平衡
         while (stackSize > 0) {
             auto* const node = pathStack[--stackSize];
-            auto* const newRootNode = rebalance(node);
+            auto* const newRootNode = rebalance(self, node);
 
             if (stackSize > 0) {
                 auto* const parent = pathStack[stackSize - 1];
@@ -727,7 +706,7 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        destructSubtree(self->rootNode);
+        destructNode(self, self->rootNode);
 
         self->rootNode = nullptr;
         self->size = 0;

@@ -20,46 +20,46 @@ namespace Catelier::src::foundation {
     } BinarySearchTree;
 
     namespace {
-        auto destructSubtree(BinarySearchTreeNode* node) -> void {
-            if (!node) {
+        auto destructNode(const BinarySearchTree* self, BinarySearchTreeNode* subtreeRoot) -> void {
+            if (!subtreeRoot) {
                 return;
             }
 
             // 递归破坏所有子树，释放节点键值内存后，释放节点本身内存
-            destructSubtree(node->leftChild);
-            destructSubtree(node->rightChild);
+            destructNode(self, subtreeRoot->leftChild);
+            destructNode(self, subtreeRoot->rightChild);
 
-            if (node->key) {
-                free(node->key);
+            if (subtreeRoot->key) {
+                free(subtreeRoot->key);
             }
 
-            if (node->value) {
-                free(node->value);
+            if (subtreeRoot->value) {
+                free(subtreeRoot->value);
             }
 
-            free(node);
+            free(subtreeRoot);
         }
-        auto copySubtree(const BinarySearchTree* self, const BinarySearchTreeNode* node) -> BinarySearchTreeNode* {
-            if (!node) {
+        auto copyNode(const BinarySearchTree* self, const BinarySearchTreeNode* sourceNode) -> BinarySearchTreeNode* {
+            if (!sourceNode) {
                 return nullptr;
             }
 
             // 递归复制左右子树
-            auto* const newLeft = copySubtree(self, node->leftChild);
-            if (node->leftChild && !newLeft) {
+            auto* const newLeft = copyNode(self, sourceNode->leftChild);
+            if (sourceNode->leftChild && !newLeft) {
                 return nullptr;
             }
 
-            auto* const newRight = copySubtree(self, node->rightChild);
-            if (node->rightChild && !newRight) {
-                destructSubtree(newLeft);
+            auto* const newRight = copyNode(self, sourceNode->rightChild);
+            if (sourceNode->rightChild && !newRight) {
+                destructNode(self, newLeft);
                 return nullptr;
             }
 
             auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
             if (!newNode) {
-                destructSubtree(newLeft);
-                destructSubtree(newRight);
+                destructNode(self, newLeft);
+                destructNode(self, newRight);
                 return nullptr;
             }
 
@@ -67,91 +67,27 @@ namespace Catelier::src::foundation {
             newNode->key = malloc(self->keySize);
             if (!newNode->key) {
                 free(newNode);
-                destructSubtree(newLeft);
-                destructSubtree(newRight);
+                destructNode(self, newLeft);
+                destructNode(self, newRight);
                 return nullptr;
             }
-            memcpy(newNode->key, node->key, self->keySize);
+            memcpy(newNode->key, sourceNode->key, self->keySize);
 
             // 分配并复制值内存
             newNode->value = malloc(self->valueSize);
             if (!newNode->value) {
                 free(newNode->key);
                 free(newNode);
-                destructSubtree(newLeft);
-                destructSubtree(newRight);
+                destructNode(self, newLeft);
+                destructNode(self, newRight);
                 return nullptr;
             }
-            memcpy(newNode->value, node->value, self->valueSize);
+            memcpy(newNode->value, sourceNode->value, self->valueSize);
 
             newNode->leftChild = newLeft;
             newNode->rightChild = newRight;
 
             return newNode;
-        }
-
-        auto createEmptyNode(const BinarySearchTree* self) -> BinarySearchTreeNode* {
-            // 创建新空节点，分配键值内存，左右子树置空
-            auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
-            if (!newNode) {
-                return nullptr;
-            }
-
-            newNode->key = malloc(self->keySize);
-            if (!newNode->key) {
-                free(newNode);
-                return nullptr;
-            }
-
-            newNode->value = malloc(self->valueSize);
-            if (!newNode->value) {
-                free(newNode->key);
-                free(newNode);
-                return nullptr;
-            }
-
-            newNode->leftChild = nullptr;
-            newNode->rightChild = nullptr;
-
-            return newNode;
-        }
-        auto createFilledNode(const BinarySearchTree* self, const void* inKey, const void* inValue) -> BinarySearchTreeNode* {
-            // 创建新空节点，分配并复制键值内存，左右子树置空
-            auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
-            if (!newNode) {
-                return nullptr;
-            }
-
-            newNode->key = malloc(self->keySize);
-            if (!newNode->key) {
-                free(newNode);
-                return nullptr;
-            }
-            memcpy(newNode->key, inKey, self->keySize);
-
-            newNode->value = malloc(self->valueSize);
-            if (!newNode->value) {
-                free(newNode->key);
-                free(newNode);
-                return nullptr;
-            }
-            memcpy(newNode->value, inValue, self->valueSize);
-
-            newNode->leftChild = nullptr;
-            newNode->rightChild = nullptr;
-
-            return newNode;
-        }
-
-        auto transplant(BinarySearchTree* self, BinarySearchTreeNode* parentNode, const BinarySearchTreeNode* targetNode, BinarySearchTreeNode* replacementNode) -> void {
-            // 用 replacementNode 自身和它的左右子树直接替换掉 targetNode
-            if (parentNode == nullptr) {
-                self->rootNode = replacementNode;
-            } else if (parentNode->leftChild == targetNode) {
-                parentNode->leftChild = replacementNode;
-            } else {
-                parentNode->rightChild = replacementNode;
-            }
         }
     }
 
@@ -179,7 +115,7 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        destructSubtree(self->rootNode);
+        destructNode(self, self->rootNode);
         free(self);
 
         return true;
@@ -196,7 +132,7 @@ namespace Catelier::src::foundation {
         }
 
         // 递归复制整棵树
-        newSelf->rootNode = copySubtree(newSelf, self->rootNode);
+        newSelf->rootNode = copyNode(newSelf, self->rootNode);
         if (self->rootNode && !newSelf->rootNode) {
             BinarySearchTree_destruct(newSelf);
             return nullptr;
@@ -242,10 +178,28 @@ namespace Catelier::src::foundation {
 
         // 空树情况：新节点直接作为根节点
         if (self->rootNode == nullptr) {
-            auto* const newNode = createFilledNode(self, inKey, inValue);
+            auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
             if (!newNode) {
                 return false;
             }
+
+            newNode->key = malloc(self->keySize);
+            if (!newNode->key) {
+                free(newNode);
+                return false;
+            }
+            memcpy(newNode->key, inKey, self->keySize);
+
+            newNode->value = malloc(self->valueSize);
+            if (!newNode->value) {
+                free(newNode->key);
+                free(newNode);
+                return false;
+            }
+            memcpy(newNode->value, inValue, self->valueSize);
+
+            newNode->leftChild = nullptr;
+            newNode->rightChild = nullptr;
 
             self->rootNode = newNode;
 
@@ -283,10 +237,28 @@ namespace Catelier::src::foundation {
 
             // 找到空位，创建新节点挂上
             if (*childPtr == nullptr) {
-                auto* const newNode = createFilledNode(self, inKey, inValue);
+                auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
                 if (!newNode) {
                     return false;
                 }
+
+                newNode->key = malloc(self->keySize);
+                if (!newNode->key) {
+                    free(newNode);
+                    return false;
+                }
+                memcpy(newNode->key, inKey, self->keySize);
+
+                newNode->value = malloc(self->valueSize);
+                if (!newNode->value) {
+                    free(newNode->key);
+                    free(newNode);
+                    return false;
+                }
+                memcpy(newNode->value, inValue, self->valueSize);
+
+                newNode->leftChild = nullptr;
+                newNode->rightChild = nullptr;
 
                 *childPtr = newNode;
 
@@ -313,10 +285,26 @@ namespace Catelier::src::foundation {
 
         // 空树情况：新节点直接作为根节点
         if (self->rootNode == nullptr) {
-            auto* const newNode = createEmptyNode(self);
+            auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
             if (!newNode) {
                 return false;
             }
+
+            newNode->key = malloc(self->keySize);
+            if (!newNode->key) {
+                free(newNode);
+                return false;
+            }
+
+            newNode->value = malloc(self->valueSize);
+            if (!newNode->value) {
+                free(newNode->key);
+                free(newNode);
+                return false;
+            }
+
+            newNode->leftChild = nullptr;
+            newNode->rightChild = nullptr;
 
             self->rootNode = newNode;
             self->size++;
@@ -358,10 +346,26 @@ namespace Catelier::src::foundation {
 
             // 找到空位，创建新节点挂上
             if (*childPtr == nullptr) {
-                auto* const newNode = createEmptyNode(self);
+                auto* const newNode = (BinarySearchTreeNode*) malloc(sizeof(BinarySearchTreeNode));
                 if (!newNode) {
                     return false;
                 }
+
+                newNode->key = malloc(self->keySize);
+                if (!newNode->key) {
+                    free(newNode);
+                    return false;
+                }
+
+                newNode->value = malloc(self->valueSize);
+                if (!newNode->value) {
+                    free(newNode->key);
+                    free(newNode);
+                    return false;
+                }
+
+                newNode->leftChild = nullptr;
+                newNode->rightChild = nullptr;
 
                 *childPtr = newNode;
 
@@ -406,13 +410,25 @@ namespace Catelier::src::foundation {
         // 找到目标节点，分不同子节点情况讨论
         if (currentNode->leftChild == nullptr) {
             // 没有左子节点情况，直接用右子节点替代当前节点
-            transplant(self, parentNode, currentNode, currentNode->rightChild);
+            if (parentNode == nullptr) {
+                self->rootNode = currentNode->rightChild;
+            } else if (parentNode->leftChild == currentNode) {
+                parentNode->leftChild = currentNode->rightChild;
+            } else {
+                parentNode->rightChild = currentNode->rightChild;
+            }
         } else if (currentNode->rightChild == nullptr) {
             // 没有右子节点情况，直接用左子节点替代当前节点
-            transplant(self, parentNode, currentNode, currentNode->leftChild);
+            if (parentNode == nullptr) {
+                self->rootNode = currentNode->leftChild;
+            } else if (parentNode->leftChild == currentNode) {
+                parentNode->leftChild = currentNode->leftChild;
+            } else {
+                parentNode->rightChild = currentNode->leftChild;
+            }
         } else {
             // 有两个子节点情况（参考 CLRS 的 TREE-DELETE 实现，区别在于当前实现中节点没有父指针，需要显式追踪父节点）
-            // 找中序后继节点，即找右子树的最左节点（左小右大，左 → 根 → 右），并用其来替代当前节点
+            // 找中序后继节点，即找右子树的最左节点（二叉搜索树情况左小右大，左 → 根 → 右），并用其来替代当前节点
             auto* successorParent = currentNode;
             auto* successorNode = currentNode->rightChild;
 
@@ -427,12 +443,22 @@ namespace Catelier::src::foundation {
             // 再把当前节点的右子树接到中序后继节点上
             // 整体即摘除中序后继节点
             if (successorParent != currentNode) {
-                transplant(self, successorParent, successorNode, successorNode->rightChild);
+                if (successorParent->leftChild == successorNode) {
+                    successorParent->leftChild = successorNode->rightChild;
+                } else {
+                    successorParent->rightChild = successorNode->rightChild;
+                }
                 successorNode->rightChild = currentNode->rightChild;
             }
 
             // 用中序后继节点替代当前节点
-            transplant(self, parentNode, currentNode, successorNode);
+            if (parentNode == nullptr) {
+                self->rootNode = successorNode;
+            } else if (parentNode->leftChild == currentNode) {
+                parentNode->leftChild = successorNode;
+            } else {
+                parentNode->rightChild = successorNode;
+            }
 
             // 让中序后继节点接管被删节点的左子树
             successorNode->leftChild = currentNode->leftChild;
@@ -486,13 +512,25 @@ namespace Catelier::src::foundation {
         // 找到目标节点，分不同子节点情况讨论
         if (currentNode->leftChild == nullptr) {
             // 没有左子节点情况，直接用右子节点替代当前节点
-            transplant(self, parentNode, currentNode, currentNode->rightChild);
+            if (parentNode == nullptr) {
+                self->rootNode = currentNode->rightChild;
+            } else if (parentNode->leftChild == currentNode) {
+                parentNode->leftChild = currentNode->rightChild;
+            } else {
+                parentNode->rightChild = currentNode->rightChild;
+            }
         } else if (currentNode->rightChild == nullptr) {
             // 没有右子节点情况，直接用左子节点替代当前节点
-            transplant(self, parentNode, currentNode, currentNode->leftChild);
+            if (parentNode == nullptr) {
+                self->rootNode = currentNode->leftChild;
+            } else if (parentNode->leftChild == currentNode) {
+                parentNode->leftChild = currentNode->leftChild;
+            } else {
+                parentNode->rightChild = currentNode->leftChild;
+            }
         } else {
             // 有两个子节点情况（参考 CLRS 的 TREE-DELETE 实现，区别在于当前实现中节点没有父指针，需要显式追踪父节点）
-            // 找中序后继节点，即找右子树的最左节点（左小右大），并用其来替代当前节点
+            // 找中序后继节点，即找右子树的最左节点（二叉搜索树情况左小右大，左 → 根 → 右），并用其来替代当前节点
             auto* successorParent = currentNode;
             auto* successorNode = currentNode->rightChild;
 
@@ -507,12 +545,22 @@ namespace Catelier::src::foundation {
             // 再把当前节点的右子树接到中序后继节点上
             // 整体即摘除中序后继节点
             if (successorParent != currentNode) {
-                transplant(self, successorParent, successorNode, successorNode->rightChild);
+                if (successorParent->leftChild == successorNode) {
+                    successorParent->leftChild = successorNode->rightChild;
+                } else {
+                    successorParent->rightChild = successorNode->rightChild;
+                }
                 successorNode->rightChild = currentNode->rightChild;
             }
 
             // 用中序后继节点替代当前节点
-            transplant(self, parentNode, currentNode, successorNode);
+            if (parentNode == nullptr) {
+                self->rootNode = successorNode;
+            } else if (parentNode->leftChild == currentNode) {
+                parentNode->leftChild = successorNode;
+            } else {
+                parentNode->rightChild = successorNode;
+            }
 
             // 让中序后继节点接管被删节点的左子树
             successorNode->leftChild = currentNode->leftChild;
@@ -531,7 +579,7 @@ namespace Catelier::src::foundation {
         }
 
         // 递归释放整棵子树
-        destructSubtree(self->rootNode);
+        destructNode(self, self->rootNode);
 
         self->rootNode = nullptr;
         self->size = 0;
