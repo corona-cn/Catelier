@@ -102,6 +102,12 @@ add_executable(Catelier
 	src/catelier/foundation/EdgeList.hpp
 	src/catelier/foundation/EdgeList.cpp
 	include/catelier/foundation/EdgeList.hpp
+	src/catelier/foundation/HeapString.hpp
+	src/catelier/foundation/HeapString.cpp
+	include/catelier/foundation/HeapString.hpp
+	src/catelier/foundation/CircularLinkedList.hpp
+	src/catelier/foundation/CircularLinkedList.cpp
+	include/catelier/foundation/CircularLinkedList.hpp
 )
 
 
