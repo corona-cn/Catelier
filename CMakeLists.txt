@@ -87,6 +87,9 @@ add_executable(Catelier
 	src/catelier/foundation/BTree.hpp
 	src/catelier/foundation/BTree.cpp
 	include/catelier/foundation/BTree.hpp
+	src/catelier/foundation/HuffmanTree.hpp
+	src/catelier/foundation/HuffmanTree.cpp
+	include/catelier/foundation/HuffmanTree.hpp
 )
 
 
