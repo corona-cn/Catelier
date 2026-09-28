@@ -90,6 +90,18 @@ add_executable(Catelier
 	src/catelier/foundation/HuffmanTree.hpp
 	src/catelier/foundation/HuffmanTree.cpp
 	include/catelier/foundation/HuffmanTree.hpp
+	src/catelier/foundation/UnionFind.hpp
+	src/catelier/foundation/UnionFind.cpp
+	include/catelier/foundation/UnionFind.hpp
+	src/catelier/foundation/AdjacencyMatrix.hpp
+	src/catelier/foundation/AdjacencyMatrix.cpp
+	include/catelier/foundation/AdjacencyMatrix.hpp
+	src/catelier/foundation/AdjacencyList.hpp
+	src/catelier/foundation/AdjacencyList.cpp
+	include/catelier/foundation/AdjacencyList.hpp
+	src/catelier/foundation/EdgeList.hpp
+	src/catelier/foundation/EdgeList.cpp
+	include/catelier/foundation/EdgeList.hpp
 )
 
 
