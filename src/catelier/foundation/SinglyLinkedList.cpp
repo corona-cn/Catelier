@@ -526,19 +526,40 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        // 头节点匹配，直接弹出头节点
-        if (dataEquals(self->headNode->data, inData)) {
-            return SinglyLinkedList_popHead(self);
+        bool removed = false;
+
+        // 头节点连续匹配，逐个弹出头节点
+        while (self->headNode && dataEquals(self->headNode->data, inData)) {
+            auto* const nextNode = self->headNode->nextNode;
+
+            // 释放头节点的数据
+            if (self->headNode->data) {
+                free(self->headNode->data);
+            }
+
+            // 释放头节点
+            free(self->headNode);
+
+            self->headNode = nextNode;
+
+            self->size--;
+            removed = true;
+        }
+
+        if (!self->headNode) {
+            return removed;
         }
 
         // 从头节点的下一个节点开始，遍历查找匹配节点
         auto* prevNode = self->headNode;
         auto* currentNode = self->headNode->nextNode;
         while (currentNode) {
+            auto* const nextNode = currentNode->nextNode;
+
             // 找到匹配节点
             if (dataEquals(currentNode->data, inData)) {
                 // 前驱跳过当前节点
-                prevNode->nextNode = currentNode->nextNode;
+                prevNode->nextNode = nextNode;
 
                 // 释放当前节点的数据
                 if (currentNode->data) {
@@ -549,16 +570,17 @@ namespace Catelier::src::foundation {
                 free(currentNode);
 
                 self->size--;
-
-                return true;
+                removed = true;
+            } else {
+                // 不匹配时前驱前移
+                prevNode = currentNode;
             }
 
             // 继续下一轮查找匹配
-            prevNode = currentNode;
-            currentNode = currentNode->nextNode;
+            currentNode = nextNode;
         }
 
-        return false;
+        return removed;
     }
     auto SinglyLinkedList_clear(SinglyLinkedList* self) -> bool {
         if (!self || self->size == 0) {

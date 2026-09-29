@@ -3,46 +3,46 @@
 #include <new>
 #include <utility>
 
-#include "../../../src/catelier/foundation/BTree.hpp"
+#include "../../../src/catelier/foundation/BinaryTree.hpp"
 
 namespace Catelier::foundation {
     template<typename Type>
-    struct AscendingComparator {
+    struct BinaryTree_AscendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a < b;
         }
     };
 
     template<typename Type>
-    struct DescendingComparator {
+    struct BinaryTree_DescendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a > b;
         }
     };
 
-    template<typename Key, typename Value, typename Compare = AscendingComparator<Key>>
-    class BTree {
+    template<typename Key, typename Value, typename Compare = BinaryTree_AscendingComparator<Key>>
+    class BinaryTree {
         public:
             class Iterator {
                 public:
-                    explicit Iterator(src::foundation::BTree* handle = nullptr, src::foundation::BTreeNode* node = nullptr, const usize index = 0) {
+                    explicit Iterator(src::foundation::BinaryTree* handle = nullptr, src::foundation::BinaryTreeNode* node = nullptr, const usize index = 0) {
                         this->handle = handle;
                         this->node = node;
                         this->index = index;
                     }
 
                     auto key() -> Key& {
-                        return *((Key*) src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle)));
+                        return *((Key*) src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle)));
                     }
                     auto value() -> Value& {
-                        return *((Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
 
                     auto operator * () -> Value& {
-                        return *((Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
                     auto operator -> () -> Value* {
-                        return (Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle));
+                        return (Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle));
                     }
 
                     auto operator ++ () -> Iterator& {
@@ -50,12 +50,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* successorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* successorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize successorIndex = 0;
 
-                        if (!src::foundation::BTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
+                        if (!src::foundation::BinaryTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -76,12 +76,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* predecessorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* predecessorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize predecessorIndex = 0;
 
-                        if (!src::foundation::BTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
+                        if (!src::foundation::BinaryTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -106,31 +106,31 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    src::foundation::BTree* handle;
-                    src::foundation::BTreeNode* node;
+                    src::foundation::BinaryTree* handle;
+                    src::foundation::BinaryTreeNode* node;
                     usize index;
             };
 
             class ConstIterator {
                 public:
-                    explicit ConstIterator(const src::foundation::BTree* handle = nullptr, const src::foundation::BTreeNode* node = nullptr, const usize index = 0) {
+                    explicit ConstIterator(const src::foundation::BinaryTree* handle = nullptr, const src::foundation::BinaryTreeNode* node = nullptr, const usize index = 0) {
                         this->handle = handle;
                         this->node = node;
                         this->index = index;
                     }
 
                     auto key() const -> const Key& {
-                        return *((const Key*) src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle)));
+                        return *((const Key*) src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle)));
                     }
                     auto value() const -> const Value& {
-                        return *((const Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((const Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
 
                     auto operator * () const -> const Value& {
-                        return *((const Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((const Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
                     auto operator -> () const -> const Value* {
-                        return (const Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle));
+                        return (const Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle));
                     }
 
                     auto operator ++ () -> ConstIterator& {
@@ -138,12 +138,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* successorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* successorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize successorIndex = 0;
 
-                        if (!src::foundation::BTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
+                        if (!src::foundation::BinaryTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -164,12 +164,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* predecessorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* predecessorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize predecessorIndex = 0;
 
-                        if (!src::foundation::BTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
+                        if (!src::foundation::BinaryTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -194,31 +194,31 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    const src::foundation::BTree* handle;
-                    const src::foundation::BTreeNode* node;
+                    const src::foundation::BinaryTree* handle;
+                    const src::foundation::BinaryTreeNode* node;
                     usize index;
             };
 
             class ReverseIterator {
                 public:
-                    explicit ReverseIterator(src::foundation::BTree* handle = nullptr, src::foundation::BTreeNode* node = nullptr, const usize index = 0) {
+                    explicit ReverseIterator(src::foundation::BinaryTree* handle = nullptr, src::foundation::BinaryTreeNode* node = nullptr, const usize index = 0) {
                         this->handle = handle;
                         this->node = node;
                         this->index = index;
                     }
 
                     auto key() -> Key& {
-                        return *((Key*) src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle)));
+                        return *((Key*) src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle)));
                     }
                     auto value() -> Value& {
-                        return *((Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
 
                     auto operator * () -> Value& {
-                        return *((Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
                     auto operator -> () -> Value* {
-                        return (Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle));
+                        return (Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle));
                     }
 
                     auto operator ++ () -> ReverseIterator& {
@@ -226,12 +226,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* predecessorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* predecessorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize predecessorIndex = 0;
 
-                        if (!src::foundation::BTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
+                        if (!src::foundation::BinaryTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -252,12 +252,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* successorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* successorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize successorIndex = 0;
 
-                        if (!src::foundation::BTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
+                        if (!src::foundation::BinaryTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -282,31 +282,31 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    src::foundation::BTree* handle;
-                    src::foundation::BTreeNode* node;
+                    src::foundation::BinaryTree* handle;
+                    src::foundation::BinaryTreeNode* node;
                     usize index;
             };
 
             class ConstReverseIterator {
                 public:
-                    explicit ConstReverseIterator(const src::foundation::BTree* handle = nullptr, const src::foundation::BTreeNode* node = nullptr, const usize index = 0) {
+                    explicit ConstReverseIterator(const src::foundation::BinaryTree* handle = nullptr, const src::foundation::BinaryTreeNode* node = nullptr, const usize index = 0) {
                         this->handle = handle;
                         this->node = node;
                         this->index = index;
                     }
 
                     auto key() const -> const Key& {
-                        return *((const Key*) src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle)));
+                        return *((const Key*) src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle)));
                     }
                     auto value() const -> const Value& {
-                        return *((const Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((const Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
 
                     auto operator * () const -> const Value& {
-                        return *((const Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle)));
+                        return *((const Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle)));
                     }
                     auto operator -> () const -> const Value* {
-                        return (const Value*) src::foundation::BTreeNode_value(this->node, this->index, src::foundation::BTree_valueSize(this->handle));
+                        return (const Value*) src::foundation::BinaryTreeNode_value(this->node, this->index, src::foundation::BinaryTree_valueSize(this->handle));
                     }
 
                     auto operator ++ () -> ConstReverseIterator& {
@@ -314,12 +314,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* predecessorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* predecessorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize predecessorIndex = 0;
 
-                        if (!src::foundation::BTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
+                        if (!src::foundation::BinaryTree_findPredecessorSlot(this->handle, currentKey, &predecessorNode, &predecessorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -340,12 +340,12 @@ namespace Catelier::foundation {
                             return *this;
                         }
 
-                        const void* const currentKey = src::foundation::BTreeNode_key(this->node, this->index, src::foundation::BTree_keySize(this->handle));
+                        const void* const currentKey = src::foundation::BinaryTreeNode_key(this->node, this->index, src::foundation::BinaryTree_keySize(this->handle));
 
-                        auto* successorNode = (src::foundation::BTreeNode*) nullptr;
+                        auto* successorNode = (src::foundation::BinaryTreeNode*) nullptr;
                         usize successorIndex = 0;
 
-                        if (!src::foundation::BTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
+                        if (!src::foundation::BinaryTree_findSuccessorSlot(this->handle, currentKey, &successorNode, &successorIndex)) {
                             this->node = nullptr;
                             this->index = 0;
                             return *this;
@@ -370,31 +370,31 @@ namespace Catelier::foundation {
                     }
 
                 private:
-                    const src::foundation::BTree* handle;
-                    const src::foundation::BTreeNode* node;
+                    const src::foundation::BinaryTree* handle;
+                    const src::foundation::BinaryTreeNode* node;
                     usize index;
             };
 
-            explicit BTree(const usize inOrder = 4) {
-                this->handle = src::foundation::BTree_construct(inOrder, sizeof(Key), sizeof(Value), compareBridge);
+            explicit BinaryTree(const usize inOrder = 4) {
+                this->handle = src::foundation::BinaryTree_construct(inOrder, sizeof(Key), sizeof(Value), compareBridge);
             }
-            ~BTree() {
+            ~BinaryTree() {
                 if (this->handle) {
-                    destructSubtreeElements(this->handle, src::foundation::BTree_rootNode(this->handle));
+                    destructSubtreeElements(this->handle, src::foundation::BinaryTree_rootNode(this->handle));
 
-                    src::foundation::BTree_destruct(this->handle);
+                    src::foundation::BinaryTree_destruct(this->handle);
 
                     this->handle = nullptr;
                 }
             }
 
-            BTree(const BTree& other) {
+            BinaryTree(const BinaryTree& other) {
                 if (!other.handle) {
                     this->handle = nullptr;
                     return;
                 }
 
-                this->handle = src::foundation::BTree_construct(src::foundation::BTree_order(other.handle), sizeof(Key), sizeof(Value), compareBridge);
+                this->handle = src::foundation::BinaryTree_construct(src::foundation::BinaryTree_order(other.handle), sizeof(Key), sizeof(Value), compareBridge);
                 if (!this->handle) {
                     return;
                 }
@@ -403,15 +403,15 @@ namespace Catelier::foundation {
                     this->insert(key, value);
                 });
             }
-            BTree(BTree&& other) noexcept {
-                this->handle = src::foundation::BTree_move(other.handle);
+            BinaryTree(BinaryTree&& other) noexcept {
+                this->handle = src::foundation::BinaryTree_move(other.handle);
             }
-            BTree& operator = (const BTree& other) {
+            BinaryTree& operator = (const BinaryTree& other) {
                 if (this != &other) {
                     this->clear();
 
                     if (!this->handle) {
-                        this->handle = src::foundation::BTree_construct(src::foundation::BTree_order(other.handle), sizeof(Key), sizeof(Value), compareBridge);
+                        this->handle = src::foundation::BinaryTree_construct(src::foundation::BinaryTree_order(other.handle), sizeof(Key), sizeof(Value), compareBridge);
                         if (!this->handle) {
                             return *this;
                         }
@@ -424,15 +424,15 @@ namespace Catelier::foundation {
 
                 return *this;
             }
-            BTree& operator = (BTree&& other) noexcept {
+            BinaryTree& operator = (BinaryTree&& other) noexcept {
                 if (this != &other) {
                     if (this->handle) {
-                        destructSubtreeElements(this->handle, src::foundation::BTree_rootNode(this->handle));
+                        destructSubtreeElements(this->handle, src::foundation::BinaryTree_rootNode(this->handle));
 
-                        src::foundation::BTree_destruct(this->handle);
+                        src::foundation::BinaryTree_destruct(this->handle);
                     }
 
-                    this->handle = src::foundation::BTree_move(other.handle);
+                    this->handle = src::foundation::BinaryTree_move(other.handle);
                 }
 
                 return *this;
@@ -447,7 +447,7 @@ namespace Catelier::foundation {
                 void* oldValueSlot = nullptr;
                 void* newValueSlot = nullptr;
 
-                if (!src::foundation::BTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
+                if (!src::foundation::BinaryTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
                     return false;
                 }
 
@@ -476,7 +476,7 @@ namespace Catelier::foundation {
                 void* oldValueSlot = nullptr;
                 void* newValueSlot = nullptr;
 
-                if (!src::foundation::BTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
+                if (!src::foundation::BinaryTree_insertSlot(this->handle, &key, &keySlot, &oldValueSlot, &newValueSlot)) {
                     return false;
                 }
 
@@ -501,7 +501,7 @@ namespace Catelier::foundation {
                 void* keySlot = nullptr;
                 void* valueSlot = nullptr;
 
-                if (!src::foundation::BTree_removeSlot(this->handle, &key, &keySlot, &valueSlot)) {
+                if (!src::foundation::BinaryTree_removeSlot(this->handle, &key, &keySlot, &valueSlot)) {
                     return false;
                 }
 
@@ -518,16 +518,16 @@ namespace Catelier::foundation {
                     return false;
                 }
 
-                destructSubtreeElements(this->handle, src::foundation::BTree_rootNode(this->handle));
+                destructSubtreeElements(this->handle, src::foundation::BinaryTree_rootNode(this->handle));
 
-                return src::foundation::BTree_clear(this->handle);
+                return src::foundation::BinaryTree_clear(this->handle);
             }
 
             auto find(const Key& key) -> Value* {
-                return (Value*) src::foundation::BTree_find(this->handle, &key);
+                return (Value*) src::foundation::BinaryTree_find(this->handle, &key);
             }
             auto find(const Key& key) const -> const Value* {
-                return (const Value*) src::foundation::BTree_find(this->handle, &key);
+                return (const Value*) src::foundation::BinaryTree_find(this->handle, &key);
             }
             auto operator[](const Key& key) -> Value& {
                 Value* const value = find(key);
@@ -559,10 +559,10 @@ namespace Catelier::foundation {
                     return Iterator(nullptr, nullptr, 0);
                 }
 
-                src::foundation::BTreeNode* node = nullptr;
+                src::foundation::BinaryTreeNode* node = nullptr;
                 usize index = 0;
 
-                if (!src::foundation::BTree_minSlot(this->handle, &node, &index)) {
+                if (!src::foundation::BinaryTree_minSlot(this->handle, &node, &index)) {
                     return Iterator(this->handle, nullptr, 0);
                 }
 
@@ -573,10 +573,10 @@ namespace Catelier::foundation {
                     return ConstIterator(nullptr, nullptr, 0);
                 }
 
-                src::foundation::BTreeNode* node = nullptr;
+                src::foundation::BinaryTreeNode* node = nullptr;
                 usize index = 0;
 
-                if (!src::foundation::BTree_minSlot(this->handle, &node, &index)) {
+                if (!src::foundation::BinaryTree_minSlot(this->handle, &node, &index)) {
                     return ConstIterator(this->handle, nullptr, 0);
                 }
 
@@ -594,10 +594,10 @@ namespace Catelier::foundation {
                     return ReverseIterator(nullptr, nullptr, 0);
                 }
 
-                src::foundation::BTreeNode* node = nullptr;
+                src::foundation::BinaryTreeNode* node = nullptr;
                 usize index = 0;
 
-                if (!src::foundation::BTree_maxSlot(this->handle, &node, &index)) {
+                if (!src::foundation::BinaryTree_maxSlot(this->handle, &node, &index)) {
                     return ReverseIterator(this->handle, nullptr, 0);
                 }
 
@@ -608,10 +608,10 @@ namespace Catelier::foundation {
                     return ConstReverseIterator(nullptr, nullptr, 0);
                 }
 
-                src::foundation::BTreeNode* node = nullptr;
+                src::foundation::BinaryTreeNode* node = nullptr;
                 usize index = 0;
 
-                if (!src::foundation::BTree_maxSlot(this->handle, &node, &index)) {
+                if (!src::foundation::BinaryTree_maxSlot(this->handle, &node, &index)) {
                     return ConstReverseIterator(this->handle, nullptr, 0);
                 }
 
@@ -629,43 +629,43 @@ namespace Catelier::foundation {
                     return 0;
                 }
 
-                auto* node = src::foundation::BTree_rootNode(this->handle);
+                auto* node = src::foundation::BinaryTree_rootNode(this->handle);
                 usize height = 0;
 
                 while (node) {
                     height++;
 
-                    if (src::foundation::BTreeNode_isLeaf(node)) {
+                    if (src::foundation::BinaryTreeNode_isLeaf(node)) {
                         break;
                     }
 
-                    node = src::foundation::BTreeNode_child(node, 0);
+                    node = src::foundation::BinaryTreeNode_child(node, 0);
                 }
 
                 return height;
             }
             auto order() const -> usize {
-                return this->handle ? src::foundation::BTree_order(this->handle) : 0;
+                return this->handle ? src::foundation::BinaryTree_order(this->handle) : 0;
             }
             auto keySize() const -> usize {
-                return this->handle ? src::foundation::BTree_keySize(this->handle) : 0;
+                return this->handle ? src::foundation::BinaryTree_keySize(this->handle) : 0;
             }
             auto valueSize() const -> usize {
-                return this->handle ? src::foundation::BTree_valueSize(this->handle) : 0;
+                return this->handle ? src::foundation::BinaryTree_valueSize(this->handle) : 0;
             }
             auto size() const -> usize {
-                return this->handle ? src::foundation::BTree_size(this->handle) : 0;
+                return this->handle ? src::foundation::BinaryTree_size(this->handle) : 0;
             }
 
             auto isEmpty() const -> bool {
-                return this->handle ? src::foundation::BTree_isEmpty(this->handle) : true;
+                return this->handle ? src::foundation::BinaryTree_isEmpty(this->handle) : true;
             }
             auto contains(const Key& key) const -> bool {
-                return src::foundation::BTree_contains(this->handle, &key);
+                return src::foundation::BinaryTree_contains(this->handle, &key);
             }
 
         private:
-            src::foundation::BTree* handle = nullptr;
+            src::foundation::BinaryTree* handle = nullptr;
 
             static auto compareBridge(const void* a, const void* b) -> i32 {
                 if (Compare{}(*((const Key*) a), *((const Key*) b))) {
@@ -679,22 +679,22 @@ namespace Catelier::foundation {
                 return 0;
             }
 
-            static auto destructSubtreeElements(const src::foundation::BTree* self, const src::foundation::BTreeNode* node) -> void {
+            static auto destructSubtreeElements(const src::foundation::BinaryTree* self, const src::foundation::BinaryTreeNode* node) -> void {
                 if (!node) {
                     return;
                 }
 
-                const usize keyCount = src::foundation::BTreeNode_keyCount(node);
+                const usize keyCount = src::foundation::BinaryTreeNode_keyCount(node);
 
-                if (!src::foundation::BTreeNode_isLeaf(node)) {
+                if (!src::foundation::BinaryTreeNode_isLeaf(node)) {
                     for (usize i = 0; i <= keyCount; ++i) {
-                        destructSubtreeElements(self, src::foundation::BTreeNode_child(node, i));
+                        destructSubtreeElements(self, src::foundation::BinaryTreeNode_child(node, i));
                     }
                 }
 
                 for (usize i = 0; i < keyCount; ++i) {
-                    ((Key*) src::foundation::BTreeNode_key(node, i, src::foundation::BTree_keySize(self)))->~Key();
-                    ((Value*) src::foundation::BTreeNode_value(node, i, src::foundation::BTree_valueSize(self)))->~Value();
+                    ((Key*) src::foundation::BinaryTreeNode_key(node, i, src::foundation::BinaryTree_keySize(self)))->~Key();
+                    ((Value*) src::foundation::BinaryTreeNode_value(node, i, src::foundation::BinaryTree_valueSize(self)))->~Value();
                 }
             }
     };

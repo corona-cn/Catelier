@@ -1,13 +1,11 @@
 #pragma once
-#include <cstdlib>
-#include <new>
 #include <utility>
 
 #include "../../../src/catelier/foundation/SinglyLinkedList.hpp"
 
 namespace Catelier::foundation {
     template<typename Type>
-    auto defaultDataEquals(const void* a, const void* b) -> bool {
+    auto SinglyLinkedList_defaultDataEquals(const void* a, const void* b) -> bool {
         return *((const Type*) a) == *((const Type*) b);
     }
 
@@ -298,17 +296,7 @@ namespace Catelier::foundation {
                     return false;
                 }
 
-                // 遍历查找第一个匹配的索引，然后走 removeAt 完成析构与移除
-                usize index = 0;
-                for (auto node = src::foundation::SinglyLinkedList_begin(this->handle); node; node = src::foundation::SinglyLinkedListNode_next(node)) {
-                    if (*((const Type*) src::foundation::SinglyLinkedListNode_data(node)) == value) {
-                        return this->removeAt(index);
-                    }
-
-                    index++;
-                }
-
-                return false;
+                return src::foundation::SinglyLinkedList_removeIf(this->handle, &value, SinglyLinkedList_defaultDataEquals<Type>);
             }
             auto clear() -> bool {
                 if (!this->handle) {
@@ -440,7 +428,7 @@ namespace Catelier::foundation {
                 return this->handle ? src::foundation::SinglyLinkedList_isEmpty(this->handle) : true;
             }
             auto contains(const Type& value) const -> bool {
-                return src::foundation::SinglyLinkedList_contains(this->handle, &value, defaultDataEquals<Type>);
+                return src::foundation::SinglyLinkedList_contains(this->handle, &value, SinglyLinkedList_defaultDataEquals<Type>);
             }
 
         private:

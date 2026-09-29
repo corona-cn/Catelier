@@ -1,37 +1,37 @@
-#include "BTree.hpp"
+#include "BinaryTree.hpp"
 
 #include <cstdlib>
 #include <cstring>
 
 namespace Catelier::src::foundation {
-    typedef struct BTreeNode {
+    typedef struct BinaryTreeNode {
         u8* keyBytes;
         u8* valueBytes;
-        BTreeNode** childNodes;
+        BinaryTreeNode** childNodes;
         usize keyCount;
         bool isLeafNode;
-    } BTreeNode;
+    } BinaryTreeNode;
 
-    typedef struct BTree {
-        BTreeNode* rootNode;
+    typedef struct BinaryTree {
+        BinaryTreeNode* rootNode;
         usize order;
         usize keySize;
         usize valueSize;
         usize size;
         i32 (*compare)(const void*, const void*);
-    } BTree;
+    } BinaryTree;
 
     namespace {
-        auto createNode(const BTree* self, const bool isLeafNode) -> BTreeNode* {
-            const usize childNodesBytes = sizeof(BTreeNode*) * self->order;
+        auto createNode(const BinaryTree* self, const bool isLeafNode) -> BinaryTreeNode* {
+            const usize childNodesBytes = sizeof(BinaryTreeNode*) * self->order;
             const usize keyBytes = self->keySize * (self->order - 1);
             const usize valueBytes = self->valueSize * (self->order - 1);
-            auto* const node = (BTreeNode*) malloc(sizeof(BTreeNode) + childNodesBytes + keyBytes + valueBytes);
+            auto* const node = (BinaryTreeNode*) malloc(sizeof(BinaryTreeNode) + childNodesBytes + keyBytes + valueBytes);
             if (!node) {
                 return nullptr;
             }
 
-            node->childNodes = (BTreeNode**) ((u8*) node + sizeof(BTreeNode));
+            node->childNodes = (BinaryTreeNode**) ((u8*) node + sizeof(BinaryTreeNode));
             node->keyBytes = (u8*) (node->childNodes + self->order);
             node->valueBytes = (u8*) (node->keyBytes + keyBytes);
 
@@ -45,7 +45,7 @@ namespace Catelier::src::foundation {
 
             return node;
         }
-        auto destructNode(const BTree* self, BTreeNode* subtreeRoot) -> void {
+        auto destructNode(const BinaryTree* self, BinaryTreeNode* subtreeRoot) -> void {
             if (!subtreeRoot) {
                 return;
             }
@@ -59,7 +59,7 @@ namespace Catelier::src::foundation {
 
             free(subtreeRoot);
         }
-        auto copyNode(const BTree* self, const BTreeNode* sourceNode) -> BTreeNode* {
+        auto copyNode(const BinaryTree* self, const BinaryTreeNode* sourceNode) -> BinaryTreeNode* {
             if (!sourceNode) {
                 return nullptr;
             }
@@ -98,7 +98,7 @@ namespace Catelier::src::foundation {
     }
 
     namespace {
-        auto findKey(const BTree* self, const BTreeNode* node, const void* inKey, usize* indexOut) -> bool {
+        auto findKey(const BinaryTree* self, const BinaryTreeNode* node, const void* inKey, usize* indexOut) -> bool {
             // 在指定节点内二分查找 key
             // 命中时 indexOut 是 key 的下标，返回 true
             // 未命中时 indexOut 是应该插入的位置，返回 false
@@ -123,7 +123,7 @@ namespace Catelier::src::foundation {
 
             return false;
         }
-        auto reserveSlot(const BTree* self, BTreeNode* node, const usize index, void** keySlotOut, void** valueSlotOut) -> void {
+        auto reserveSlot(const BinaryTree* self, BinaryTreeNode* node, const usize index, void** keySlotOut, void** valueSlotOut) -> void {
             // 在指定节点指定下标处腾出 key-value 空位，返回两个未初始化槽位
             // 把 [index, keyCount) 范围内的数据右移一位
             memmove(node->keyBytes + (index + 1) * self->keySize, node->keyBytes + index * self->keySize, (node->keyCount - index) * self->keySize);
@@ -134,7 +134,7 @@ namespace Catelier::src::foundation {
 
             node->keyCount++;
         }
-        auto splitNode(const BTree* self, BTreeNode* parentNode, const usize index) -> bool {
+        auto splitNode(const BinaryTree* self, BinaryTreeNode* parentNode, const usize index) -> bool {
             // 分裂指定父节点的第 index 个满子节点
             // 中间 key-value 上浮到父节点的 index 位置
             // 左半部分保留在原节点中，右半部分移入新建节点
@@ -154,7 +154,7 @@ namespace Catelier::src::foundation {
 
             // 非叶节点还要把右半部分的子节点指针复制到 newChildNode
             if (!childNode->isLeafNode) {
-                memcpy(newChildNode->childNodes, childNode->childNodes + (mid + 1), (rightKeyCount + 1) * sizeof(BTreeNode*));
+                memcpy(newChildNode->childNodes, childNode->childNodes + (mid + 1), (rightKeyCount + 1) * sizeof(BinaryTreeNode*));
             }
 
             // child 保留左半部分
@@ -163,7 +163,7 @@ namespace Catelier::src::foundation {
             // parentNode 腾出 index 位置的 key / value / childNode
             memmove(parentNode->keyBytes + (index + 1) * self->keySize, parentNode->keyBytes + index * self->keySize, (parentNode->keyCount - index) * self->keySize);
             memmove(parentNode->valueBytes + (index + 1) * self->valueSize, parentNode->valueBytes + index * self->valueSize, (parentNode->keyCount - index) * self->valueSize);
-            memmove(parentNode->childNodes + (index + 2), parentNode->childNodes + (index + 1), (parentNode->keyCount - index) * sizeof(BTreeNode*));
+            memmove(parentNode->childNodes + (index + 2), parentNode->childNodes + (index + 1), (parentNode->keyCount - index) * sizeof(BinaryTreeNode*));
 
             // 把 childNode 的中间 key / value 上浮到 parentNode 的 index 位置
             memcpy(parentNode->keyBytes + index * self->keySize, childNode->keyBytes + mid * self->keySize, self->keySize);
@@ -177,7 +177,7 @@ namespace Catelier::src::foundation {
             return true;
         }
 
-        auto releaseSlot(const BTree* self, BTreeNode* node, const usize index) -> void {
+        auto releaseSlot(const BinaryTree* self, BinaryTreeNode* node, const usize index) -> void {
             // 从节点中删除指定下标的 key-value
             // 把 (index, keyCount) 范围内的数据左移一位
             memmove(node->keyBytes + index * self->keySize, node->keyBytes + (index + 1) * self->keySize, (node->keyCount - index - 1) * self->keySize);
@@ -185,7 +185,7 @@ namespace Catelier::src::foundation {
 
             node->keyCount--;
         }
-        auto mergeNodes(const BTree* self, BTreeNode* parentNode, const usize index) -> void {
+        auto mergeNodes(const BinaryTree* self, BinaryTreeNode* parentNode, const usize index) -> void {
             // 把父节点的 index key-value 下移，与 index+1 位置的子节点合并到 index 位置的子节点
             // 合并后父节点减少一个 key 和一个子节点
             auto* leftChildNode = *(parentNode->childNodes + index);
@@ -203,7 +203,7 @@ namespace Catelier::src::foundation {
 
             // 非叶节点还要把 rightChildNode 的子节点指针追加到 leftChildNode
             if (!leftChildNode->isLeafNode) {
-                memcpy(leftChildNode->childNodes + leftChildNode->keyCount, rightChildNode->childNodes, (rightChildNode->keyCount + 1) * sizeof(BTreeNode*));
+                memcpy(leftChildNode->childNodes + leftChildNode->keyCount, rightChildNode->childNodes, (rightChildNode->keyCount + 1) * sizeof(BinaryTreeNode*));
             }
 
             leftChildNode->keyCount += rightChildNode->keyCount;
@@ -213,9 +213,9 @@ namespace Catelier::src::foundation {
             // 从父节点删除 index key-value，同时删除 index+1 位置的子节点
             releaseSlot(self, parentNode, index);
 
-            memmove(parentNode->childNodes + index + 1, parentNode->childNodes + index + 2, (parentNode->keyCount - index) * sizeof(BTreeNode*));
+            memmove(parentNode->childNodes + index + 1, parentNode->childNodes + index + 2, (parentNode->keyCount - index) * sizeof(BinaryTreeNode*));
         }
-        auto fixChildUnderflow(const BTree* self, BTreeNode* parentNode, const usize index) -> void {
+        auto fixChildUnderflow(const BinaryTree* self, BinaryTreeNode* parentNode, const usize index) -> void {
             // 修复父节点第 index 个子节点的下溢
             // 优先从左右兄弟借位，都不行则合并
             const usize minKeyCount = (self->order - 2) / 2;
@@ -231,7 +231,7 @@ namespace Catelier::src::foundation {
 
                     // childNode 的子节点指针右移一位，左兄弟的最后一个子节点移到最左
                     if (!childNode->isLeafNode) {
-                        memmove(childNode->childNodes + 1, childNode->childNodes, (childNode->keyCount + 1) * sizeof(BTreeNode*));
+                        memmove(childNode->childNodes + 1, childNode->childNodes, (childNode->keyCount + 1) * sizeof(BinaryTreeNode*));
                         *(childNode->childNodes) = *(leftSiblingNode->childNodes + leftSiblingNode->keyCount);
                     }
 
@@ -265,7 +265,7 @@ namespace Catelier::src::foundation {
                     // 右兄弟的第一个子节点移到 childNode 末尾
                     if (!childNode->isLeafNode) {
                         *(childNode->childNodes + childNode->keyCount + 1) = *(rightSiblingNode->childNodes);
-                        memmove(rightSiblingNode->childNodes, rightSiblingNode->childNodes + 1, rightSiblingNode->keyCount * sizeof(BTreeNode*));
+                        memmove(rightSiblingNode->childNodes, rightSiblingNode->childNodes + 1, rightSiblingNode->keyCount * sizeof(BinaryTreeNode*));
                     }
 
                     // 右兄弟的 key-value 左移一位
@@ -288,7 +288,7 @@ namespace Catelier::src::foundation {
                 mergeNodes(self, parentNode, index);
             }
         }
-        auto removeFromSubtree(const BTree* self, BTreeNode* node, const void* inKey, const usize minKeyCount) -> bool {
+        auto removeFromSubtree(const BinaryTree* self, BinaryTreeNode* node, const void* inKey, const usize minKeyCount) -> bool {
             usize index;
             const bool found = findKey(self, node, inKey, &index);
 
@@ -359,12 +359,12 @@ namespace Catelier::src::foundation {
         }
     }
 
-    auto BTree_construct(const usize inOrder, const usize inKeySize, const usize inValueSize, i32 (*compare)(const void*, const void*)) -> BTree* {
+    auto BinaryTree_construct(const usize inOrder, const usize inKeySize, const usize inValueSize, i32 (*compare)(const void*, const void*)) -> BinaryTree* {
         if (inOrder < 3 || inKeySize == 0 || inValueSize == 0 || !compare) {
             return nullptr;
         }
 
-        auto* const self = (BTree*) malloc(sizeof(BTree));
+        auto* const self = (BinaryTree*) malloc(sizeof(BinaryTree));
         if (!self) {
             return nullptr;
         }
@@ -378,7 +378,7 @@ namespace Catelier::src::foundation {
 
         return self;
     }
-    auto BTree_destruct(BTree* self) -> bool {
+    auto BinaryTree_destruct(BinaryTree* self) -> bool {
         if (!self) {
             return false;
         }
@@ -390,19 +390,19 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto BTree_copy(const BTree* self) -> BTree* {
+    auto BinaryTree_copy(const BinaryTree* self) -> BinaryTree* {
         if (!self) {
             return nullptr;
         }
 
-        auto* const newSelf = BTree_construct(self->order, self->keySize, self->valueSize, self->compare);
+        auto* const newSelf = BinaryTree_construct(self->order, self->keySize, self->valueSize, self->compare);
         if (!newSelf) {
             return nullptr;
         }
 
         newSelf->rootNode = copyNode(newSelf, self->rootNode);
         if (self->rootNode && !newSelf->rootNode) {
-            BTree_destruct(newSelf);
+            BinaryTree_destruct(newSelf);
             return nullptr;
         }
 
@@ -410,12 +410,12 @@ namespace Catelier::src::foundation {
 
         return newSelf;
     }
-    auto BTree_move(BTree* self) -> BTree* {
+    auto BinaryTree_move(BinaryTree* self) -> BinaryTree* {
         if (!self) {
             return nullptr;
         }
 
-        auto* const newSelf = (BTree*) malloc(sizeof(BTree));
+        auto* const newSelf = (BinaryTree*) malloc(sizeof(BinaryTree));
         if (!newSelf) {
             return nullptr;
         }
@@ -437,7 +437,7 @@ namespace Catelier::src::foundation {
         return newSelf;
     }
 
-    auto BTree_insert(BTree* self, const void* inKey, const void* inValue) -> bool {
+    auto BinaryTree_insert(BinaryTree* self, const void* inKey, const void* inValue) -> bool {
         if (!self || !inKey || !inValue) {
             return false;
         }
@@ -535,7 +535,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto BTree_insertSlot(BTree* self, const void* inKey, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool {
+    auto BinaryTree_insertSlot(BinaryTree* self, const void* inKey, void** keySlotOut, void** oldValueSlotOut, void** newValueSlotOut) -> bool {
         if (!self || !inKey || !keySlotOut || !oldValueSlotOut || !newValueSlotOut) {
             return false;
         }
@@ -630,7 +630,7 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto BTree_remove(BTree* self, const void* inKey) -> bool {
+    auto BinaryTree_remove(BinaryTree* self, const void* inKey) -> bool {
         if (!self || !inKey || !self->rootNode) {
             return false;
         }
@@ -657,7 +657,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto BTree_removeSlot(BTree* self, const void* inKey, void** keySlotOut, void** valueSlotOut) -> bool {
+    auto BinaryTree_removeSlot(BinaryTree* self, const void* inKey, void** keySlotOut, void** valueSlotOut) -> bool {
         if (!self || !inKey || !keySlotOut || !valueSlotOut || !self->rootNode) {
             return false;
         }
@@ -685,7 +685,7 @@ namespace Catelier::src::foundation {
                 memcpy(valueCopy, node->valueBytes + index * self->valueSize, self->valueSize);
 
                 // 从树中删除目标 key
-                if (!BTree_remove(self, inKey)) {
+                if (!BinaryTree_remove(self, inKey)) {
                     free(keyCopy);
                     free(valueCopy);
                     return false;
@@ -704,7 +704,7 @@ namespace Catelier::src::foundation {
             node = *(node->childNodes + index);
         }
     }
-    auto BTree_clear(BTree* self) -> bool {
+    auto BinaryTree_clear(BinaryTree* self) -> bool {
         if (!self || self->size == 0) {
             return false;
         }
@@ -717,7 +717,7 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto BTree_find(const BTree* self, const void* inKey) -> void* {
+    auto BinaryTree_find(const BinaryTree* self, const void* inKey) -> void* {
         if (!self || !inKey || !self->rootNode) {
             return nullptr;
         }
@@ -736,7 +736,7 @@ namespace Catelier::src::foundation {
             node = *(node->childNodes + index);
         }
     }
-    auto BTree_findSlot(const BTree* self, const void* inKey, BTreeNode** nodeOut, usize* indexOut) -> bool {
+    auto BinaryTree_findSlot(const BinaryTree* self, const void* inKey, BinaryTreeNode** nodeOut, usize* indexOut) -> bool {
         if (!self || !inKey || !nodeOut || !indexOut || !self->rootNode) {
             return false;
         }
@@ -757,14 +757,14 @@ namespace Catelier::src::foundation {
             node = *(node->childNodes + index);
         }
     }
-    auto BTree_findSuccessorSlot(const BTree* self, const void* inKey, BTreeNode** nodeOut, usize* indexOut) -> bool {
+    auto BinaryTree_findSuccessorSlot(const BinaryTree* self, const void* inKey, BinaryTreeNode** nodeOut, usize* indexOut) -> bool {
         if (!self || !inKey || !nodeOut || !indexOut || !self->rootNode) {
             return false;
         }
 
         // 记录比 inKey 大的最小槽位候选
         // 下降过程中每次未命中且 index < keyCount时，当前节点的 index 槽位都可能是候选
-        auto* successorNode = (BTreeNode*) nullptr;
+        auto* successorNode = (BinaryTreeNode*) nullptr;
         usize successorIndex = 0;
 
         auto* node = self->rootNode;
@@ -821,14 +821,14 @@ namespace Catelier::src::foundation {
             node = *(node->childNodes + index);
         }
     }
-    auto BTree_findPredecessorSlot(const BTree* self, const void* inKey, BTreeNode** nodeOut, usize* indexOut) -> bool {
+    auto BinaryTree_findPredecessorSlot(const BinaryTree* self, const void* inKey, BinaryTreeNode** nodeOut, usize* indexOut) -> bool {
         if (!self || !inKey || !nodeOut || !indexOut || !self->rootNode) {
             return false;
         }
 
         // 记录比 inKey 小的最大槽位候选
         // 下降过程中每次未命中且 index > 0时，当前节点的 index-1 槽位都可能是候选
-        auto* predecessorNode = (BTreeNode*) nullptr;
+        auto* predecessorNode = (BinaryTreeNode*) nullptr;
         usize predecessorIndex = 0;
 
         auto* node = self->rootNode;
@@ -886,14 +886,14 @@ namespace Catelier::src::foundation {
         }
     }
 
-    auto BTree_rootNode(const BTree* self) -> BTreeNode* {
+    auto BinaryTree_rootNode(const BinaryTree* self) -> BinaryTreeNode* {
         if (!self) {
             return nullptr;
         }
 
         return self->rootNode;
     }
-    auto BTree_minSlot(const BTree* self, BTreeNode** nodeOut, usize* indexOut) -> bool {
+    auto BinaryTree_minSlot(const BinaryTree* self, BinaryTreeNode** nodeOut, usize* indexOut) -> bool {
         if (!self || !nodeOut || !indexOut || !self->rootNode) {
             return false;
         }
@@ -909,7 +909,7 @@ namespace Catelier::src::foundation {
 
         return true;
     }
-    auto BTree_maxSlot(const BTree* self, BTreeNode** nodeOut, usize* indexOut) -> bool {
+    auto BinaryTree_maxSlot(const BinaryTree* self, BinaryTreeNode** nodeOut, usize* indexOut) -> bool {
         if (!self || !nodeOut || !indexOut || !self->rootNode) {
             return false;
         }
@@ -926,28 +926,28 @@ namespace Catelier::src::foundation {
         return true;
     }
 
-    auto BTree_order(const BTree* self) -> usize {
+    auto BinaryTree_order(const BinaryTree* self) -> usize {
         if (!self) {
             return 0;
         }
 
         return self->order;
     }
-    auto BTree_keySize(const BTree* self) -> usize {
+    auto BinaryTree_keySize(const BinaryTree* self) -> usize {
         if (!self) {
             return 0;
         }
 
         return self->keySize;
     }
-    auto BTree_valueSize(const BTree* self) -> usize {
+    auto BinaryTree_valueSize(const BinaryTree* self) -> usize {
         if (!self) {
             return 0;
         }
 
         return self->valueSize;
     }
-    auto BTree_size(const BTree* self) -> usize {
+    auto BinaryTree_size(const BinaryTree* self) -> usize {
         if (!self) {
             return 0;
         }
@@ -955,14 +955,14 @@ namespace Catelier::src::foundation {
         return self->size;
     }
 
-    auto BTree_isEmpty(const BTree* self) -> bool {
+    auto BinaryTree_isEmpty(const BinaryTree* self) -> bool {
         if (!self) {
             return true;
         }
 
         return self->size == 0;
     }
-    auto BTree_contains(const BTree* self, const void* inKey) -> bool {
+    auto BinaryTree_contains(const BinaryTree* self, const void* inKey) -> bool {
         if (!self || !inKey || !self->rootNode) {
             return false;
         }
@@ -982,35 +982,35 @@ namespace Catelier::src::foundation {
         }
     }
 
-    auto BTreeNode_key(const BTreeNode* node, const usize index, const usize inKeySize) -> void* {
+    auto BinaryTreeNode_key(const BinaryTreeNode* node, const usize index, const usize inKeySize) -> void* {
         if (!node) {
             return nullptr;
         }
 
         return node->keyBytes + index * inKeySize;
     }
-    auto BTreeNode_value(const BTreeNode* node, const usize index, const usize inValueSize) -> void* {
+    auto BinaryTreeNode_value(const BinaryTreeNode* node, const usize index, const usize inValueSize) -> void* {
         if (!node) {
             return nullptr;
         }
 
         return node->valueBytes + index * inValueSize;
     }
-    auto BTreeNode_child(const BTreeNode* node, const usize index) -> BTreeNode* {
+    auto BinaryTreeNode_child(const BinaryTreeNode* node, const usize index) -> BinaryTreeNode* {
         if (!node) {
             return nullptr;
         }
 
         return *(node->childNodes + index);
     }
-    auto BTreeNode_keyCount(const BTreeNode* node) -> usize {
+    auto BinaryTreeNode_keyCount(const BinaryTreeNode* node) -> usize {
         if (!node) {
             return 0;
         }
 
         return node->keyCount;
     }
-    auto BTreeNode_isLeaf(const BTreeNode* node) -> bool {
+    auto BinaryTreeNode_isLeaf(const BinaryTreeNode* node) -> bool {
         if (!node) {
             return true;
         }

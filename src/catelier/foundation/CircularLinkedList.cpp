@@ -41,14 +41,15 @@ namespace Catelier::src::foundation {
         }
 
         // 从 head 开始遍历一圈，释放所有节点
-        auto* currentNode = headOf(self);
+        auto* const headNode = headOf(self);
+        auto* currentNode = headNode;
         while (currentNode) {
             auto* const nextNode = currentNode->nextNode;
 
             free(currentNode->data);
             free(currentNode);
 
-            if (nextNode == headOf(self)) {
+            if (nextNode == headNode) {
                 break;
             }
 
@@ -561,37 +562,51 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        // 头节点匹配
-        if (dataEquals(headNode->data, inData)) {
-            return CircularLinkedList_popHead(self);
-        }
+        bool removed = false;
+        auto* prevNode = self->tailNode;
+        auto* currentNode = headNode;
+        usize remaining = self->size;
 
-        // 从第二个节点开始遍历
-        auto* prevNode = headNode;
-        auto* currentNode = headNode->nextNode;
+        // 遍历一圈，删除所有匹配的节点
+        while (remaining > 0 && currentNode) {
+            auto* const nextNode = currentNode->nextNode;
 
-        while (currentNode && currentNode != headNode) {
+            // 找到匹配节点
             if (dataEquals(currentNode->data, inData)) {
-                prevNode->nextNode = currentNode->nextNode;
+                // 前驱跳过当前节点
+                prevNode->nextNode = nextNode;
 
-                // 如果删的是 tail，更新 tail
+                // 删除的是 tail 时更新 tail
                 if (currentNode == self->tailNode) {
                     self->tailNode = prevNode;
                 }
 
-                free(currentNode->data);
+                // 释放当前节点的数据
+                if (currentNode->data) {
+                    free(currentNode->data);
+                }
+
+                // 释放当前节点
                 free(currentNode);
 
                 self->size--;
-
-                return true;
+                removed = true;
+            } else {
+                // 不匹配时前驱前移
+                prevNode = currentNode;
             }
 
-            prevNode = currentNode;
-            currentNode = currentNode->nextNode;
+            // 继续下一轮查找匹配
+            currentNode = nextNode;
+            remaining--;
         }
 
-        return false;
+        // 全部删除后清空 tail
+        if (self->size == 0) {
+            self->tailNode = nullptr;
+        }
+
+        return removed;
     }
     auto CircularLinkedList_clear(CircularLinkedList* self) -> bool {
         if (!self || self->size == 0) {
@@ -732,6 +747,8 @@ namespace Catelier::src::foundation {
             return false;
         }
 
+        auto* const oldTail = self->tailNode;
+
         auto* prevNode = (CircularLinkedListNode*) nullptr;
         auto* currentNode = oldHead;
 
@@ -748,8 +765,9 @@ namespace Catelier::src::foundation {
             currentNode = nextNode;
         }
 
-        // 原来的 head 变成 tail
+        // 原来的 head 变成 tail，next 指回新的 head
         self->tailNode = oldHead;
+        oldHead->nextNode = oldTail;
 
         return true;
     }

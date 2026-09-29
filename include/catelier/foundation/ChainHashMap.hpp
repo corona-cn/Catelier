@@ -8,12 +8,12 @@
 
 namespace Catelier::foundation {
     template<typename Key>
-    auto defaultHash(const void* key) -> u64 {
+    auto ChainHashMap_defaultHash(const void* key) -> u64 {
         return src::util::hash::FNV1a::hash64Mem(key, sizeof(Key));
     }
 
     template<typename Key>
-    auto defaultKeyEquals(const void* a, const void* b) -> bool {
+    auto ChainHashMap_defaultKeyEquals(const void* a, const void* b) -> bool {
         return *((const Key*) a) == *((const Key*) b);
     }
 
@@ -160,7 +160,7 @@ namespace Catelier::foundation {
                     src::foundation::ChainHashMapNode* node;
             };
 
-            explicit ChainHashMap(const usize initialCapacity = 4, u64 (*hash)(const void*) = defaultHash<Key>, bool (*keyEquals)(const void*, const void*) = defaultKeyEquals<Key>) {
+            explicit ChainHashMap(const usize initialCapacity = 4, u64 (*hash)(const void*) = ChainHashMap_defaultHash<Key>, bool (*keyEquals)(const void*, const void*) = ChainHashMap_defaultKeyEquals<Key>) {
                 this->handle = src::foundation::ChainHashMap_construct(initialCapacity, sizeof(Key), sizeof(Value), hash, keyEquals);
             }
             ~ChainHashMap() {
@@ -184,7 +184,7 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::ChainHashMap_construct(src::foundation::ChainHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), defaultHash<Key>, defaultKeyEquals<Key>);
+                this->handle = src::foundation::ChainHashMap_construct(src::foundation::ChainHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), ChainHashMap_defaultHash<Key>, ChainHashMap_defaultKeyEquals<Key>);
                 if (!this->handle) {
                     return;
                 }
@@ -201,7 +201,7 @@ namespace Catelier::foundation {
                     this->clear();
 
                     if (!this->handle) {
-                        this->handle = src::foundation::ChainHashMap_construct(src::foundation::ChainHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), defaultHash<Key>, defaultKeyEquals<Key>);
+                        this->handle = src::foundation::ChainHashMap_construct(src::foundation::ChainHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), ChainHashMap_defaultHash<Key>, ChainHashMap_defaultKeyEquals<Key>);
                         if (!this->handle) {
                             return *this;
                         }

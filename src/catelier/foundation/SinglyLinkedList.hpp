@@ -33,7 +33,7 @@ namespace Catelier::src::foundation {
     auto SinglyLinkedList_tail(const SinglyLinkedList* self) -> SinglyLinkedListNode*;
 
     auto SinglyLinkedList_set(SinglyLinkedList* self, usize index, const void* inElement, usize inElementSize) -> bool;
-    auto SinglyLinkedList_setSlot(SinglyLinkedList* self, usize index, usize inElementSize) -> void*;
+    auto SinglyLinkedList_setSlot(const SinglyLinkedList* self, usize index, usize inElementSize) -> void*;
 
     auto SinglyLinkedList_reverse(SinglyLinkedList* self) -> bool;
 

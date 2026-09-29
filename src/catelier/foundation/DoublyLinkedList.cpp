@@ -564,24 +564,26 @@ namespace Catelier::src::foundation {
             return false;
         }
 
-        // 头节点匹配，直接弹出头节点
-        if (dataEquals(self->headNode->data, inData)) {
-            return DoublyLinkedList_popHead(self);
-        }
+        bool removed = false;
+        auto* currentNode = self->headNode;
 
-        // 尾节点匹配，直接弹出尾节点
-        if (dataEquals(self->tailNode->data, inData)) {
-            return DoublyLinkedList_popTail(self);
-        }
+        while (currentNode) {
+            auto* const nextNode = currentNode->nextNode;
 
-        // 从中间节点遍历查找匹配节点
-        auto* currentNode = self->headNode->nextNode;
-        while (currentNode != self->tailNode) {
             // 找到匹配节点
             if (dataEquals(currentNode->data, inData)) {
                 // 前驱和后继互相指向，跳过当前节点
-                currentNode->prevNode->nextNode = currentNode->nextNode;
-                currentNode->nextNode->prevNode = currentNode->prevNode;
+                if (currentNode->prevNode) {
+                    currentNode->prevNode->nextNode = currentNode->nextNode;
+                } else {
+                    self->headNode = currentNode->nextNode;
+                }
+
+                if (currentNode->nextNode) {
+                    currentNode->nextNode->prevNode = currentNode->prevNode;
+                } else {
+                    self->tailNode = currentNode->prevNode;
+                }
 
                 // 释放当前节点的数据
                 if (currentNode->data) {
@@ -592,15 +594,14 @@ namespace Catelier::src::foundation {
                 free(currentNode);
 
                 self->size--;
-
-                return true;
+                removed = true;
             }
 
             // 继续下一轮查找匹配
-            currentNode = currentNode->nextNode;
+            currentNode = nextNode;
         }
 
-        return false;
+        return removed;
     }
     auto DoublyLinkedList_clear(DoublyLinkedList* self) -> bool {
         if (!self || self->size == 0) {

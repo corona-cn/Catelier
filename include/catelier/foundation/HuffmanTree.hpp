@@ -3,13 +3,13 @@
 
 namespace Catelier::foundation {
     template<typename Type>
-    struct AscendingComparator {
+    struct HuffmanTree_AscendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a < b;
         }
     };
 
-    template<typename Key, typename Compare = AscendingComparator<Key>>
+    template<typename Key, typename Compare = HuffmanTree_AscendingComparator<Key>>
     class HuffmanTree {
         public:
             explicit HuffmanTree() {

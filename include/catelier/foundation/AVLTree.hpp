@@ -6,20 +6,20 @@
 
 namespace Catelier::foundation {
     template<typename Type>
-    struct AscendingComparator {
+    struct AVLTree_AscendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a < b;
         }
     };
 
     template<typename Type>
-    struct DescendingComparator {
+    struct AVLTree_DescendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {
             return a > b;
         }
     };
 
-    template<typename Key, typename Value, typename Compare = AscendingComparator<Key>>
+    template<typename Key, typename Value, typename Compare = AVLTree_AscendingComparator<Key>>
     class AVLTree {
         public:
             class Iterator {

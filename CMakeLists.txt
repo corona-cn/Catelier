@@ -84,9 +84,9 @@ add_executable(Catelier
 	src/catelier/foundation/AVLTree.hpp
 	src/catelier/foundation/AVLTree.cpp
 	include/catelier/foundation/AVLTree.hpp
-	src/catelier/foundation/BTree.hpp
-	src/catelier/foundation/BTree.cpp
-	include/catelier/foundation/BTree.hpp
+	src/catelier/foundation/BinaryTree.hpp
+	src/catelier/foundation/BinaryTree.cpp
+	include/catelier/foundation/BinaryTree.hpp
 	src/catelier/foundation/HuffmanTree.hpp
 	src/catelier/foundation/HuffmanTree.cpp
 	include/catelier/foundation/HuffmanTree.hpp
@@ -108,6 +108,10 @@ add_executable(Catelier
 	src/catelier/foundation/CircularLinkedList.hpp
 	src/catelier/foundation/CircularLinkedList.cpp
 	include/catelier/foundation/CircularLinkedList.hpp
+	test/demo/catelier/foundation/ArrayList.hpp
+	test/demo/catelier/foundation/SinglyLinkedList.hpp
+	test/demo/catelier/foundation/DoublyLinkedList.hpp
+	test/demo/catelier/foundation/CircularLinkedList.hpp
 )
 
 

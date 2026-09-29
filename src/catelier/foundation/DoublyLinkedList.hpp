@@ -33,7 +33,7 @@ namespace Catelier::src::foundation {
     auto DoublyLinkedList_tail(const DoublyLinkedList* self) -> DoublyLinkedListNode*;
 
     auto DoublyLinkedList_set(DoublyLinkedList* self, usize index, const void* inElement, usize inElementSize) -> bool;
-    auto DoublyLinkedList_setSlot(DoublyLinkedList* self, usize index, usize inElementSize) -> void*;
+    auto DoublyLinkedList_setSlot(const DoublyLinkedList* self, usize index, usize inElementSize) -> void*;
 
     auto DoublyLinkedList_reverse(DoublyLinkedList* self) -> bool;
 

@@ -10,12 +10,12 @@ namespace Catelier::src::foundation {
     auto BitArray_copy(const BitArray* self) -> BitArray*;
     auto BitArray_move(BitArray* self) -> BitArray*;
 
-    auto BitArray_setOne(BitArray* self, usize index) -> bool;
-    auto BitArray_fillOne(BitArray* self) -> bool;
-    auto BitArray_setZero(BitArray* self, usize index) -> bool;
-    auto BitArray_fillZero(BitArray* self) -> bool;
-    auto BitArray_toggle(BitArray* self, usize index) -> bool;
-    auto BitArray_toggleAll(BitArray* self) -> bool;
+    auto BitArray_setOne(const BitArray* self, usize index) -> bool;
+    auto BitArray_fillOne(const BitArray* self) -> bool;
+    auto BitArray_setZero(const BitArray* self, usize index) -> bool;
+    auto BitArray_fillZero(const BitArray* self) -> bool;
+    auto BitArray_toggle(const BitArray* self, usize index) -> bool;
+    auto BitArray_toggleAll(const BitArray* self) -> bool;
 
     auto BitArray_get(const BitArray* self, usize index, bool* outValue) -> bool;
 

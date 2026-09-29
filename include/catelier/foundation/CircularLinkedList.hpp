@@ -7,7 +7,7 @@
 
 namespace Catelier::foundation {
     template<typename Type>
-    auto defaultDataEquals(const void* a, const void* b) -> bool {
+    auto CircularLinkedList_defaultDataEquals(const void* a, const void* b) -> bool {
         return *((const Type*) a) == *((const Type*) b);
     }
 
@@ -332,18 +332,7 @@ namespace Catelier::foundation {
                     return false;
                 }
 
-                usize index = 0;
-                for (auto* node = src::foundation::CircularLinkedList_begin(this->handle);
-                     node != nullptr;
-                     node = nextNodeOf(this->handle, node)) {
-                    if (*((const Type*) src::foundation::CircularLinkedListNode_data(node)) == value) {
-                        return this->removeAt(index);
-                    }
-
-                    index++;
-                }
-
-                return false;
+                return src::foundation::CircularLinkedList_removeIf(this->handle, &value, CircularLinkedList_defaultDataEquals<Type>);
             }
             auto clear() -> bool {
                 if (!this->handle) {
@@ -534,7 +523,7 @@ namespace Catelier::foundation {
                     return false;
                 }
 
-                return src::foundation::CircularLinkedList_contains(this->handle, &value, defaultDataEquals<Type>);
+                return src::foundation::CircularLinkedList_contains(this->handle, &value, CircularLinkedList_defaultDataEquals<Type>);
             }
 
         private:

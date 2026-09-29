@@ -7,12 +7,12 @@
 
 namespace Catelier::foundation {
     template<typename Key>
-    auto defaultHash(const void* key) -> u64 {
+    auto OpenHashMap_defaultHash(const void* key) -> u64 {
         return src::util::hash::FNV1a::hash64Mem(key, sizeof(Key));
     }
 
     template<typename Key>
-    auto defaultKeyEquals(const void* a, const void* b) -> bool {
+    auto OpenHashMap_defaultKeyEquals(const void* a, const void* b) -> bool {
         return *((const Key*) a) == *((const Key*) b);
     }
 
@@ -193,7 +193,7 @@ namespace Catelier::foundation {
                     void* valuePtr;
             };
 
-            explicit OpenHashMap(const usize initialCapacity = 4, u64 (*hash)(const void*) = defaultHash<Key>, bool (*keyEquals)(const void*, const void*) = defaultKeyEquals<Key>) {
+            explicit OpenHashMap(const usize initialCapacity = 4, u64 (*hash)(const void*) = OpenHashMap_defaultHash<Key>, bool (*keyEquals)(const void*, const void*) = OpenHashMap_defaultKeyEquals<Key>) {
                 this->handle = src::foundation::OpenHashMap_construct(initialCapacity, sizeof(Key), sizeof(Value), hash, keyEquals);
             }
             ~OpenHashMap() {
@@ -221,7 +221,7 @@ namespace Catelier::foundation {
                     return;
                 }
 
-                this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), defaultHash<Key>, defaultKeyEquals<Key>);
+                this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), OpenHashMap_defaultHash<Key>, OpenHashMap_defaultKeyEquals<Key>);
                 if (!this->handle) {
                     return;
                 }
@@ -238,7 +238,7 @@ namespace Catelier::foundation {
                     this->eraseAll();
 
                     if (!this->handle) {
-                        this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), defaultHash<Key>, defaultKeyEquals<Key>);
+                        this->handle = src::foundation::OpenHashMap_construct(src::foundation::OpenHashMap_capacity(other.handle), sizeof(Key), sizeof(Value), OpenHashMap_defaultHash<Key>, OpenHashMap_defaultKeyEquals<Key>);
                         if (!this->handle) {
                             return *this;
                         }

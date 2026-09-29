@@ -1,13 +1,11 @@
 #pragma once
-#include <cstdlib>
-#include <new>
 #include <utility>
 
 #include "../../../src/catelier/foundation/DoublyLinkedList.hpp"
 
 namespace Catelier::foundation {
     template<typename Type>
-    auto defaultDataEquals(const void* a, const void* b) -> bool {
+    auto DoublyLinkedList_defaultDataEquals(const void* a, const void* b) -> bool {
         return *((const Type*) a) == *((const Type*) b);
     }
 
@@ -402,17 +400,7 @@ namespace Catelier::foundation {
                     return false;
                 }
 
-                // 遍历查找第一个匹配的索引，然后走 removeAt 完成析构与移除
-                usize index = 0;
-                for (auto node = src::foundation::DoublyLinkedList_begin(this->handle); node; node = src::foundation::DoublyLinkedListNode_next(node)) {
-                    if (*((const Type*) src::foundation::DoublyLinkedListNode_data(node)) == value) {
-                        return this->removeAt(index);
-                    }
-
-                    index++;
-                }
-
-                return false;
+                return src::foundation::DoublyLinkedList_removeIf(this->handle, &value, DoublyLinkedList_defaultDataEquals<Type>);
             }
             auto clear() -> bool {
                 if (!this->handle) {
@@ -557,7 +545,7 @@ namespace Catelier::foundation {
                 return this->handle ? src::foundation::DoublyLinkedList_isEmpty(this->handle) : true;
             }
             auto contains(const Type& value) const -> bool {
-                return src::foundation::DoublyLinkedList_contains(this->handle, &value, defaultDataEquals<Type>);
+                return src::foundation::DoublyLinkedList_contains(this->handle, &value, DoublyLinkedList_defaultDataEquals<Type>);
             }
 
         private:
