@@ -112,6 +112,18 @@ add_executable(Catelier
 	test/demo/catelier/foundation/SinglyLinkedList.hpp
 	test/demo/catelier/foundation/DoublyLinkedList.hpp
 	test/demo/catelier/foundation/CircularLinkedList.hpp
+	src/catelier/foundation/primitive/ThreadKey.hpp
+	src/catelier/foundation/primitive/ThreadKey.cpp
+	include/catelier/foundation/primitive/ThreadKey.hpp
+	src/catelier/foundation/primitive/Mutex.hpp
+	src/catelier/foundation/primitive/Mutex.cpp
+	include/catelier/foundation/primitive/Mutex.hpp
+	src/catelier/foundation/primitive/OnceFlag.hpp
+	src/catelier/foundation/primitive/OnceFlag.cpp
+	include/catelier/foundation/primitive/OnceFlag.hpp
+	src/catelier/foundation/concurrency/ThreadLocal.hpp
+	src/catelier/foundation/concurrency/ThreadLocal.cpp
+	include/catelier/foundation/concurrency/ThreadLocal.hpp
 )
 
 
