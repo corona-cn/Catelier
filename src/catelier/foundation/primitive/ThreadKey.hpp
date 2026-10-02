@@ -4,6 +4,7 @@
 namespace Catelier::src::foundation::primitive {
     typedef struct ThreadKey {
         u32 handle;
+        u64 generation;
         bool valid;
     } ThreadKey;
 

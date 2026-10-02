@@ -315,11 +315,22 @@ namespace Catelier::src::foundation::concurrency {
         entry->owner = self;
         entry->value = self->initFunc(self->userData);
 
+        primitive::Mutex_lock(&entryLock);
+
+        if (!self->valid) {
+            primitive::Mutex_unlock(&entryLock);
+
+            if (self->onDestroy) {
+                self->onDestroy(entry->value, self->userData);
+            }
+
+            free(entry);
+            return nullptr;
+        }
+
         entry->nextInBucket = *(registry->buckets + finalBucketIndex);
         *(registry->buckets + finalBucketIndex) = entry;
         registry->entryCount++;
-
-        primitive::Mutex_lock(&entryLock);
 
         entry->nextInOwner = self->head;
         self->head = entry;
@@ -339,13 +350,50 @@ namespace Catelier::src::foundation::concurrency {
             return;
         }
 
+        constexpr usize STACK_ENTRY_COUNT = 64;
+        void* stackValues[STACK_ENTRY_COUNT];
+
         primitive::Mutex_lock(&entryLock);
 
+        usize count = 0;
         for (ThreadLocalEntry* entry = self->head; entry; entry = entry->nextInOwner) {
-            action(entry->value, inUserData);
+            count++;
+        }
+
+        if (count == 0) {
+            primitive::Mutex_unlock(&entryLock);
+            return;
+        }
+
+        void** values = stackValues;
+        const bool usesHeap = (count > STACK_ENTRY_COUNT);
+
+        if (usesHeap) {
+            values = (void**) malloc(sizeof(void*) * count);
+            if (!values) {
+                for (ThreadLocalEntry* entry = self->head; entry; entry = entry->nextInOwner) {
+                    action(entry->value, inUserData);
+                }
+                primitive::Mutex_unlock(&entryLock);
+                return;
+            }
+        }
+
+        usize index = 0;
+        for (ThreadLocalEntry* entry = self->head; entry; entry = entry->nextInOwner) {
+            values[index] = entry->value;
+            index++;
         }
 
         primitive::Mutex_unlock(&entryLock);
+
+        for (usize i = 0; i < count; ++i) {
+            action(values[i], inUserData);
+        }
+
+        if (usesHeap) {
+            free(values);
+        }
     }
 
     auto ThreadLocal_entryCount(const ThreadLocal* self) -> usize {

@@ -12,20 +12,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
 # === 配置通用编译器选项 === #
-option(RELEASE_WITH_DEBUG "Build Release with debug info (for easier debugging)" OFF)
+# 普通配置 #
+option(DEBUG_MODE "Build with debug info (for easier debugging)" OFF)
 if(MSVC)
-	if(RELEASE_WITH_DEBUG)
-		# 调试专用 Release：禁用所有优化，保留完整调试信息
+	if(DEBUG_MODE)
+		# 调试专用：禁用所有优化，保留完整调试信息
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi /O0")
 		set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG:FULL /OPT:REF /OPT:ICF")
 		set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG:FULL /OPT:REF /OPT:ICF")
 	else()
-		# 原有优化 Release
+		# 原有优化
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Ob2 /Oi /Ot /Oy /GL /fp:fast")
 		set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
 		set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
 	endif()
 	add_compile_options(/utf-8)
+endif()
+
+# 特殊配置 #
+if (!DEBUG_MODE)
+	include(CheckIPOSupported)
+	check_ipo_supported(RESULT IPO_SUPPORTED)
+	if(IPO_SUPPORTED)
+		set_target_properties(Catelier PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+	endif()
 endif()
 
 

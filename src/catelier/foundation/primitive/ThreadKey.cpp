@@ -13,12 +13,15 @@ namespace Catelier::src::foundation::primitive {
     namespace {
         typedef struct WindowsFlsValue {
             u32 keyIndex;
+            u64 keyGeneration;
             void* userValue;
         } WindowsFlsValue;
 
         constexpr u32 THREAD_KEY_MAX_INDEX = 2048;
 
         void (*userCallbacks[THREAD_KEY_MAX_INDEX])(void*) = {};
+        u64 keyGenerations[THREAD_KEY_MAX_INDEX] = {};
+        u64 keyGenerationCounter = 0;
 
         CRITICAL_SECTION registryLock;
         INIT_ONCE registryOnce = INIT_ONCE_STATIC_INIT;
@@ -38,12 +41,13 @@ namespace Catelier::src::foundation::primitive {
                 return;
             }
 
-            const u32 keyIndex  = wrapper->keyIndex;
+            const u32 keyIndex = wrapper->keyIndex;
+            const u64 keyGeneration = wrapper->keyGeneration;
             void* const userValue = wrapper->userValue;
 
             void (*userCallback)(void*) = nullptr;
             EnterCriticalSection(&registryLock);
-            if (keyIndex < THREAD_KEY_MAX_INDEX) {
+            if (keyIndex < THREAD_KEY_MAX_INDEX && keyGenerations[keyIndex] == keyGeneration) {
                 userCallback = userCallbacks[keyIndex];
             }
             LeaveCriticalSection(&registryLock);
@@ -55,16 +59,15 @@ namespace Catelier::src::foundation::primitive {
             free(wrapper);
         }
     }
-    #endif
 
-    #ifdef _WIN32
     auto ThreadKey_init(ThreadKey* self, void (*destructor)(void* value)) -> bool {
-        if (!self) {
+        if (!self || self->valid) {
             return false;
         }
 
         self->handle = 0;
-        self->valid  = false;
+        self->generation = 0;
+        self->valid = false;
 
         ensureRegistryInitialized();
 
@@ -79,10 +82,14 @@ namespace Catelier::src::foundation::primitive {
         }
 
         EnterCriticalSection(&registryLock);
+        keyGenerationCounter++;
+        const u64 generation = keyGenerationCounter;
         userCallbacks[index] = destructor;
+        keyGenerations[index] = generation;
         LeaveCriticalSection(&registryLock);
 
         self->handle = (u32) index;
+        self->generation = generation;
         self->valid = true;
 
         return true;
@@ -97,12 +104,14 @@ namespace Catelier::src::foundation::primitive {
         EnterCriticalSection(&registryLock);
         if ((u32) index < THREAD_KEY_MAX_INDEX) {
             userCallbacks[index] = nullptr;
+            keyGenerations[index] = 0;
         }
         LeaveCriticalSection(&registryLock);
 
         FlsFree(index);
 
         self->handle = 0;
+        self->generation = 0;
         self->valid = false;
 
         return true;
@@ -118,6 +127,10 @@ namespace Catelier::src::foundation::primitive {
             return nullptr;
         }
 
+        if (wrapper->keyGeneration != self->generation) {
+            return nullptr;
+        }
+
         return wrapper->userValue;
     }
     auto ThreadKey_set(const ThreadKey* self, void* value) -> bool {
@@ -128,6 +141,12 @@ namespace Catelier::src::foundation::primitive {
         const DWORD index = (DWORD) self->handle;
 
         auto* wrapper = (WindowsFlsValue*) FlsGetValue(index);
+
+        if (wrapper && wrapper->keyGeneration != self->generation) {
+            FlsSetValue(index, nullptr);
+            free(wrapper);
+            wrapper = nullptr;
+        }
 
         if (value == nullptr) {
             if (wrapper) {
@@ -148,6 +167,7 @@ namespace Catelier::src::foundation::primitive {
         }
 
         wrapper->keyIndex = (u32) index;
+        wrapper->keyGeneration = self->generation;
         wrapper->userValue = value;
 
         if (!FlsSetValue(index, wrapper)) {
@@ -159,11 +179,12 @@ namespace Catelier::src::foundation::primitive {
     }
     #else
     auto ThreadKey_init(ThreadKey* self, void (*destructor)(void* value)) -> bool {
-        if (!self) {
+        if (!self || self->valid) {
             return false;
         }
 
         self->handle = 0;
+        self->generation = 0;
         self->valid = false;
 
         pthread_key_t key;
@@ -184,6 +205,7 @@ namespace Catelier::src::foundation::primitive {
         pthread_key_delete((pthread_key_t) self->handle);
 
         self->handle = 0;
+        self->generation = 0;
         self->valid = false;
 
         return true;

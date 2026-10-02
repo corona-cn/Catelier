@@ -10,7 +10,7 @@ namespace Catelier::src::foundation::primitive {
     auto Mutex_init(Mutex* self) -> bool;
     auto Mutex_destroy(Mutex* self) -> bool;
 
-    auto Mutex_lock(const Mutex* self) -> bool;
-    auto Mutex_unlock(const Mutex* self) -> bool;
-    auto Mutex_tryLock(const Mutex* self) -> bool;
+    auto Mutex_lock(Mutex* self) -> bool;
+    auto Mutex_unlock(Mutex* self) -> bool;
+    auto Mutex_tryLock(Mutex* self) -> bool;
 }
