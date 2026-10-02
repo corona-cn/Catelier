@@ -135,6 +135,21 @@ add_executable(Catelier
 	src/catelier/foundation/concurrency/ThreadLocal.cpp
 	include/catelier/foundation/concurrency/ThreadLocal.hpp
 	test/demo/catelier/foundation/concurrency/ThreadLocal.hpp
+	src/catelier/foundation/primitive/Atomic.hpp
+	src/catelier/foundation/primitive/Atomic.cpp
+	include/catelier/foundation/primitive/Atomic.hpp
+	src/catelier/foundation/primitive/Thread.hpp
+	src/catelier/foundation/primitive/Thread.cpp
+	include/catelier/foundation/primitive/Thread.hpp
+	src/catelier/foundation/sync/ConditionalVar.hpp
+	src/catelier/foundation/sync/ConditionalVar.cpp
+	include/catelier/foundation/sync/ConditionalVar.hpp
+	src/catelier/foundation/sync/ConflatedSignal.hpp
+	src/catelier/foundation/sync/ConflatedSignal.cpp
+	include/catelier/foundation/sync/ConflatedSignal.hpp
+	src/catelier/foundation/concurrent/ConcurrentUnboundedQueue.hpp
+	src/catelier/foundation/concurrent/ConcurrentUnboundedQueue.cpp
+	include/catelier/foundation/concurrent/ConcurrentUnboundedQueue.hpp
 )
 
 

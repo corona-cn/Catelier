@@ -146,6 +146,13 @@ namespace Catelier::foundation::primitive {
                 return this->handle.valid;
             }
 
+            auto rawHandle() -> src::foundation::primitive::Mutex* {
+                return &this->handle;
+            }
+            auto rawHandle() const -> const src::foundation::primitive::Mutex* {
+                return &this->handle;
+            }
+
         private:
             src::foundation::primitive::Mutex handle = {};
     };
