@@ -10,37 +10,41 @@ namespace Catelier::foundation::concurrency {
                 void (*onDestroy)(void* value, void* userData) = nullptr,
                 void* userData = nullptr
             ) {
-                src::foundation::concurrency::ThreadLocal_init(&this->handle, initFunc, onThreadExit, onDestroy, userData);
+                src::foundation::concurrency::ThreadLocal_construct(&this->handle, initFunc, onThreadExit, onDestroy, userData);
             }
             ~ThreadLocal() {
                 if (this->handle.valid) {
-                    src::foundation::concurrency::ThreadLocal_destroy(&this->handle);
+                    src::foundation::concurrency::ThreadLocal_destruct(&this->handle);
                 }
             }
 
-            ThreadLocal(const ThreadLocal&) = delete;
-            ThreadLocal(ThreadLocal&& other) noexcept {
-                this->handle = other.handle;
-
-                other.handle.valid = false;
+            ThreadLocal(const ThreadLocal& other) {
+                src::foundation::concurrency::ThreadLocal_copy(&this->handle, &other.handle);
             }
-            ThreadLocal& operator = (const ThreadLocal&) = delete;
-            ThreadLocal& operator = (ThreadLocal&& other) noexcept {
+            ThreadLocal(ThreadLocal&& other) noexcept {
+                src::foundation::concurrency::ThreadLocal_move(&this->handle, &other.handle);
+            }
+            ThreadLocal& operator = (const ThreadLocal& other) {
                 if (this != &other) {
                     if (this->handle.valid) {
-                        src::foundation::concurrency::ThreadLocal_destroy(&this->handle);
+                        src::foundation::concurrency::ThreadLocal_destruct(&this->handle);
                     }
 
-                    this->handle = other.handle;
-
-                    other.handle.valid = false;
+                    src::foundation::concurrency::ThreadLocal_copy(&this->handle, &other.handle);
                 }
 
                 return *this;
             }
+            ThreadLocal& operator = (ThreadLocal&& other) noexcept {
+                if (this != &other) {
+                    if (this->handle.valid) {
+                        src::foundation::concurrency::ThreadLocal_destruct(&this->handle);
+                    }
 
-            auto isValid() const -> bool {
-                return this->handle.valid;
+                    src::foundation::concurrency::ThreadLocal_move(&this->handle, &other.handle);
+                }
+
+                return *this;
             }
 
             auto get() const -> void* {
@@ -52,6 +56,10 @@ namespace Catelier::foundation::concurrency {
 
             auto forEach(void (*action)(void* value, void* inUserData), void* inUserData) const -> void {
                 src::foundation::concurrency::ThreadLocal_forEach(&this->handle, action, inUserData);
+            }
+
+            auto isValid() const -> bool {
+                return this->handle.valid;
             }
 
             auto entryCount() const -> usize {

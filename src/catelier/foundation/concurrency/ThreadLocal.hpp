@@ -15,8 +15,11 @@ namespace Catelier::src::foundation::concurrency {
         bool valid;
     } ThreadLocal;
 
-    auto ThreadLocal_init(ThreadLocal* self, void* (*inInitFunc)(void* userData), void (*inOnThreadExit)(void* value, void* userData), void (*inOnDestroy)(void* value, void* userData), void* inUserData) -> bool;
-    auto ThreadLocal_destroy(ThreadLocal* self) -> bool;
+    auto ThreadLocal_construct(ThreadLocal* self, void* (*inInitFunc)(void* userData), void (*inOnThreadExit)(void* value, void* userData), void (*inOnDestroy)(void* value, void* userData), void* inUserData) -> bool;
+    auto ThreadLocal_destruct(ThreadLocal* self) -> bool;
+
+    auto ThreadLocal_copy(ThreadLocal* self, const ThreadLocal* source) -> bool;
+    auto ThreadLocal_move(ThreadLocal* self, ThreadLocal* source) -> bool;
 
     auto ThreadLocal_get(const ThreadLocal* self) -> void*;
     auto ThreadLocal_getOrCreate(ThreadLocal* self) -> void*;

@@ -69,8 +69,8 @@ namespace Catelier::src::foundation::concurrency {
     }
 
     namespace {
-        auto threadLocalHash(const ThreadLocal* self) -> usize {
-            return ((usize) self >> 4) * (usize) 0x9E3779B97F4A7C15ULL;
+        auto threadLocalHash(u64 generation) -> usize {
+            return (usize) generation * (usize) 0x9E3779B97F4A7C15ULL;
         }
 
         auto rehashRegistry(ThreadLocalRegistry* registry) -> bool {
@@ -92,7 +92,7 @@ namespace Catelier::src::foundation::concurrency {
                         free(entry);
                         registry->entryCount--;
                     } else {
-                        const usize newIndex = threadLocalHash(entry->owner) & (newBucketCount - 1);
+                        const usize newIndex = threadLocalHash(entry->owner->generation) & (newBucketCount - 1);
                         entry->nextInBucket = *(newBuckets + newIndex);
                         *(newBuckets + newIndex) = entry;
                     }
@@ -156,7 +156,7 @@ namespace Catelier::src::foundation::concurrency {
         }
     }
 
-    auto ThreadLocal_init(ThreadLocal* self, void* (*inInitFunc)(void* userData), void (*inOnThreadExit)(void* value, void* userData), void (*inOnDestroy)(void* value, void* userData), void* inUserData) -> bool {
+    auto ThreadLocal_construct(ThreadLocal* self, void* (*inInitFunc)(void* userData), void (*inOnThreadExit)(void* value, void* userData), void (*inOnDestroy)(void* value, void* userData), void* inUserData) -> bool {
         if (!self || !inInitFunc) {
             return false;
         }
@@ -179,7 +179,7 @@ namespace Catelier::src::foundation::concurrency {
 
         return true;
     }
-    auto ThreadLocal_destroy(ThreadLocal* self) -> bool {
+    auto ThreadLocal_destruct(ThreadLocal* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
@@ -211,6 +211,63 @@ namespace Catelier::src::foundation::concurrency {
         return true;
     }
 
+    auto ThreadLocal_copy(ThreadLocal* self, const ThreadLocal* source) -> bool {
+        if (!self || !source || !source->valid) {
+            return false;
+        }
+
+        ensureGlobalInit();
+
+        primitive::Mutex_lock(&generationLock);
+        generationCounter++;
+        const u64 generation = generationCounter;
+        primitive::Mutex_unlock(&generationLock);
+
+        self->head = nullptr;
+        self->entryCount = 0;
+        self->initFunc = source->initFunc;
+        self->onThreadExit = source->onThreadExit;
+        self->onDestroy = source->onDestroy;
+        self->userData = source->userData;
+        self->generation = generation;
+        self->valid = true;
+
+        return true;
+    }
+    auto ThreadLocal_move(ThreadLocal* self, ThreadLocal* source) -> bool {
+        if (!self || !source || !source->valid) {
+            return false;
+        }
+
+        self->head = source->head;
+        self->entryCount = source->entryCount;
+        self->initFunc = source->initFunc;
+        self->onThreadExit = source->onThreadExit;
+        self->onDestroy = source->onDestroy;
+        self->userData = source->userData;
+        self->generation = source->generation;
+        self->valid = true;
+
+        primitive::Mutex_lock(&entryLock);
+
+        for (ThreadLocalEntry* entry = self->head; entry; entry = entry->nextInOwner) {
+            entry->owner = self;
+        }
+
+        primitive::Mutex_unlock(&entryLock);
+
+        source->head = nullptr;
+        source->entryCount = 0;
+        source->initFunc = nullptr;
+        source->onThreadExit = nullptr;
+        source->onDestroy = nullptr;
+        source->userData = nullptr;
+        source->generation = 0;
+        source->valid = false;
+
+        return true;
+    }
+
     auto ThreadLocal_get(const ThreadLocal* self) -> void* {
         if (!self || !self->valid) {
             return nullptr;
@@ -225,7 +282,7 @@ namespace Catelier::src::foundation::concurrency {
             return registry->cachedValue;
         }
 
-        const usize bucketIndex = threadLocalHash(self) & (registry->bucketCount - 1);
+        const usize bucketIndex = threadLocalHash(self->generation) & (registry->bucketCount - 1);
 
         const ThreadLocalEntry* entry = *(registry->buckets + bucketIndex);
         while (entry) {
@@ -275,7 +332,7 @@ namespace Catelier::src::foundation::concurrency {
             return registry->cachedValue;
         }
 
-        const usize bucketIndex = threadLocalHash(self) & (registry->bucketCount - 1);
+        const usize bucketIndex = threadLocalHash(self->generation) & (registry->bucketCount - 1);
         ThreadLocalEntry** link = &registry->buckets[bucketIndex];
 
         while (*link) {
@@ -305,7 +362,7 @@ namespace Catelier::src::foundation::concurrency {
             }
         }
 
-        const usize finalBucketIndex = threadLocalHash(self) & (registry->bucketCount - 1);
+        const usize finalBucketIndex = threadLocalHash(self->generation) & (registry->bucketCount - 1);
 
         auto* const entry = (ThreadLocalEntry*) malloc(sizeof(ThreadLocalEntry));
         if (!entry) {

@@ -134,6 +134,7 @@ add_executable(Catelier
 	src/catelier/foundation/concurrency/ThreadLocal.hpp
 	src/catelier/foundation/concurrency/ThreadLocal.cpp
 	include/catelier/foundation/concurrency/ThreadLocal.hpp
+	test/demo/catelier/foundation/concurrency/ThreadLocal.hpp
 )
 
 

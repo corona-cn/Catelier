@@ -39,7 +39,7 @@ namespace Catelier::src::foundation::primitive {
         return true;
     }
 
-    auto Mutex_lock(const Mutex* self) -> bool {
+    auto Mutex_lock(Mutex* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
@@ -48,7 +48,7 @@ namespace Catelier::src::foundation::primitive {
 
         return true;
     }
-    auto Mutex_unlock(const Mutex* self) -> bool {
+    auto Mutex_unlock(Mutex* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
@@ -57,7 +57,7 @@ namespace Catelier::src::foundation::primitive {
 
         return true;
     }
-    auto Mutex_tryLock(const Mutex* self) -> bool {
+    auto Mutex_tryLock(Mutex* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
@@ -98,21 +98,21 @@ namespace Catelier::src::foundation::primitive {
         return true;
     }
 
-    auto Mutex_lock(const Mutex* self) -> bool {
+    auto Mutex_lock(Mutex* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
 
         return pthread_mutex_lock(asNative(self)) == 0;
     }
-    auto Mutex_unlock(const Mutex* self) -> bool {
+    auto Mutex_unlock(Mutex* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
 
         return pthread_mutex_unlock(asNative(self)) == 0;
     }
-    auto Mutex_tryLock(const Mutex* self) -> bool {
+    auto Mutex_tryLock(Mutex* self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
