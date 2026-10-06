@@ -33,13 +33,6 @@ namespace Catelier::src::foundation::concurrent {
     } ConcurrentUnboundedQueue;
 
     namespace {
-        auto valueFromNode(const ConcurrentUnboundedQueueNode* node) -> u64 {
-            return (u64) (uintptr_t) node;
-        }
-        auto nodeFromValue(const u64 value) -> ConcurrentUnboundedQueueNode* {
-            return (ConcurrentUnboundedQueueNode*) (uintptr_t) value;
-        }
-
         auto allocateNode(const usize elementSize, const void* inElement) -> ConcurrentUnboundedQueueNode* {
             auto* const node = (ConcurrentUnboundedQueueNode*) malloc(sizeof(ConcurrentUnboundedQueueNode));
             if (!node) {
@@ -84,16 +77,16 @@ namespace Catelier::src::foundation::concurrent {
         auto linkNode(ConcurrentUnboundedQueue* self, ConcurrentUnboundedQueueNode* node) -> void {
             while (true) {
                 const u64 tailValue = primitive::Atomic_load(&self->tail, primitive::MEMORY_ORDER_ACQUIRE);
-                auto* const tail = nodeFromValue(tailValue);
+                auto* const tail = (ConcurrentUnboundedQueueNode*) (addr) tailValue;
                 const u64 nextValue = primitive::Atomic_load(&tail->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
-                auto* const next = nodeFromValue(nextValue);
+                auto* const next = (ConcurrentUnboundedQueueNode*) (addr) nextValue;
 
                 if (tailValue == primitive::Atomic_load(&self->tail, primitive::MEMORY_ORDER_ACQUIRE)) {
                     if (!next) {
                         u64 expectedNext = nextValue;
-                        if (primitive::Atomic_compareExchange(&tail->nextNode, &expectedNext, valueFromNode(node), primitive::MEMORY_ORDER_RELEASE)) {
+                        if (primitive::Atomic_compareExchange(&tail->nextNode, &expectedNext, (u64) (addr) node, primitive::MEMORY_ORDER_RELEASE)) {
                             u64 expectedTail = tailValue;
-                            primitive::Atomic_compareExchange(&self->tail, &expectedTail, valueFromNode(node), primitive::MEMORY_ORDER_RELEASE);
+                            primitive::Atomic_compareExchange(&self->tail, &expectedTail, (u64) (addr) node, primitive::MEMORY_ORDER_RELEASE);
                             primitive::Atomic_fetchAdd(&self->size, 1, primitive::MEMORY_ORDER_RELAXED);
 
                             return;
@@ -176,13 +169,13 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        if (!primitive::Atomic_init(&self->head, valueFromNode(dummy))) {
+        if (!primitive::Atomic_init(&self->head, (u64) (addr) dummy)) {
             freeNode(dummy);
             free(self);
             return nullptr;
         }
 
-        if (!primitive::Atomic_init(&self->tail, valueFromNode(dummy))) {
+        if (!primitive::Atomic_init(&self->tail, (u64) (addr) dummy)) {
             primitive::Atomic_destroy(&self->head);
             freeNode(dummy);
             free(self);
@@ -219,9 +212,9 @@ namespace Catelier::src::foundation::concurrent {
 
         concurrency::ThreadLocal_destruct(&self->threadState);
 
-        auto* head = nodeFromValue(primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_RELAXED));
+        auto* head = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_RELAXED);
         while (head) {
-            auto* const nextNode = nodeFromValue(primitive::Atomic_load(&head->nextNode, primitive::MEMORY_ORDER_RELAXED));
+            auto* const nextNode = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&head->nextNode, primitive::MEMORY_ORDER_RELAXED);
             freeNode(head);
             head = nextNode;
         }
@@ -245,9 +238,9 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        const auto* node = nodeFromValue(primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_RELAXED));
+        const auto* node = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_RELAXED);
         if (node) {
-            node = nodeFromValue(primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED));
+            node = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
         }
 
         while (node) {
@@ -256,7 +249,7 @@ namespace Catelier::src::foundation::concurrent {
                 return nullptr;
             }
 
-            node = nodeFromValue(primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED));
+            node = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
         }
 
         return newSelf;
@@ -308,8 +301,8 @@ namespace Catelier::src::foundation::concurrent {
             return newSelf;
         }
 
-        primitive::Atomic_store(&self->head, valueFromNode(dummy), primitive::MEMORY_ORDER_RELAXED);
-        primitive::Atomic_store(&self->tail, valueFromNode(dummy), primitive::MEMORY_ORDER_RELAXED);
+        primitive::Atomic_store(&self->head, (u64) (addr) dummy, primitive::MEMORY_ORDER_RELAXED);
+        primitive::Atomic_store(&self->tail, (u64) (addr) dummy, primitive::MEMORY_ORDER_RELAXED);
         primitive::Atomic_store(&self->size, 0, primitive::MEMORY_ORDER_RELAXED);
 
         if (!concurrency::ThreadLocal_construct(&self->threadState, threadStateInit, threadStateExit, threadStateExit, nullptr)) {
@@ -380,11 +373,11 @@ namespace Catelier::src::foundation::concurrent {
 
         while (true) {
             const u64 headValue = primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_ACQUIRE);
-            auto* const head = nodeFromValue(headValue);
+            auto* const head = (ConcurrentUnboundedQueueNode*) (addr) headValue;
             const u64 tailValue = primitive::Atomic_load(&self->tail, primitive::MEMORY_ORDER_ACQUIRE);
-            auto* const tail = nodeFromValue(tailValue);
+            auto* const tail = (ConcurrentUnboundedQueueNode*) (addr) tailValue;
             const u64 nextValue = primitive::Atomic_load(&head->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
-            auto* const next = nodeFromValue(nextValue);
+            auto* const next = (ConcurrentUnboundedQueueNode*) (addr) nextValue;
 
             if (headValue == primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_ACQUIRE)) {
                 if (head == tail) {
@@ -456,33 +449,33 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        const auto* const dummy = nodeFromValue(primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_ACQUIRE));
+        const auto* const dummy = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_ACQUIRE);
         if (!dummy) {
             return nullptr;
         }
 
-        return nodeFromValue(primitive::Atomic_load(&dummy->nextNode, primitive::MEMORY_ORDER_ACQUIRE));
+        return (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&dummy->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
     }
     auto ConcurrentUnboundedQueue_tail(const ConcurrentUnboundedQueue* self) -> ConcurrentUnboundedQueueNode* {
         if (!self || !self->valid) {
             return nullptr;
         }
 
-        return nodeFromValue(primitive::Atomic_load(&self->tail, primitive::MEMORY_ORDER_ACQUIRE));
+        return (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&self->tail, primitive::MEMORY_ORDER_ACQUIRE);
     }
     auto ConcurrentUnboundedQueue_get(const ConcurrentUnboundedQueue* self, const usize index) -> ConcurrentUnboundedQueueNode* {
         if (!self || !self->valid) {
             return nullptr;
         }
 
-        const auto* targetNode = nodeFromValue(primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_ACQUIRE));
+        const auto* targetNode = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&self->head, primitive::MEMORY_ORDER_ACQUIRE);
 
         if (targetNode) {
-            targetNode = nodeFromValue(primitive::Atomic_load(&targetNode->nextNode, primitive::MEMORY_ORDER_ACQUIRE));
+            targetNode = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&targetNode->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
         }
 
         for (usize i = 0; i < index && targetNode; ++i) {
-            targetNode = nodeFromValue(primitive::Atomic_load(&targetNode->nextNode, primitive::MEMORY_ORDER_ACQUIRE));
+            targetNode = (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&targetNode->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
         }
 
         return (ConcurrentUnboundedQueueNode*) targetNode;
@@ -516,7 +509,7 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        return nodeFromValue(primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_ACQUIRE));
+        return (ConcurrentUnboundedQueueNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
     }
     auto ConcurrentUnboundedQueueNode_data(const ConcurrentUnboundedQueueNode* node) -> void* {
         if (!node) {

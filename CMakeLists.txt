@@ -12,36 +12,26 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
 # === 配置通用编译器选项 === #
-# 普通配置 #
 option(DEBUG_MODE "Build with debug info (for easier debugging)" OFF)
 if(MSVC)
 	if(DEBUG_MODE)
-		# 调试专用：禁用所有优化，保留完整调试信息
+		# 禁用优化，完整调试
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Zi /O0")
 		set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /DEBUG:FULL /OPT:REF /OPT:ICF")
 		set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /DEBUG:FULL /OPT:REF /OPT:ICF")
 	else()
-		# 原有优化
-		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Ob2 /Oi /Ot /Oy /GL /fp:fast")
-		set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
-		set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF")
+		# 禁用调试，完整优化
+		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Ob2 /Oi /Ot /Oy /fp:fast")
+		set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /OPT:REF /OPT:ICF")
+		set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /OPT:REF /OPT:ICF")
 	endif()
 	add_compile_options(/utf-8)
-endif()
-
-# 特殊配置 #
-if (!DEBUG_MODE)
-	include(CheckIPOSupported)
-	check_ipo_supported(RESULT IPO_SUPPORTED)
-	if(IPO_SUPPORTED)
-		set_target_properties(Catelier PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
-	endif()
 endif()
 
 
 # === 配置项目文件 === #
 add_executable(Catelier
-	test/Main.cpp
+	test/catelier/Main.cpp
 	src/catelier/CommonMacro.hpp
 	src/catelier/CommonPrimitives.hpp
 	src/catelier/foundation/ArrayList.hpp
@@ -118,10 +108,6 @@ add_executable(Catelier
 	src/catelier/foundation/CircularLinkedList.hpp
 	src/catelier/foundation/CircularLinkedList.cpp
 	include/catelier/foundation/CircularLinkedList.hpp
-	test/demo/catelier/foundation/ArrayList.hpp
-	test/demo/catelier/foundation/SinglyLinkedList.hpp
-	test/demo/catelier/foundation/DoublyLinkedList.hpp
-	test/demo/catelier/foundation/CircularLinkedList.hpp
 	src/catelier/foundation/primitive/ThreadKey.hpp
 	src/catelier/foundation/primitive/ThreadKey.cpp
 	include/catelier/foundation/primitive/ThreadKey.hpp
@@ -134,7 +120,6 @@ add_executable(Catelier
 	src/catelier/foundation/concurrency/ThreadLocal.hpp
 	src/catelier/foundation/concurrency/ThreadLocal.cpp
 	include/catelier/foundation/concurrency/ThreadLocal.hpp
-	test/demo/catelier/foundation/concurrency/ThreadLocal.hpp
 	src/catelier/foundation/primitive/Atomic.hpp
 	src/catelier/foundation/primitive/Atomic.cpp
 	include/catelier/foundation/primitive/Atomic.hpp
@@ -150,7 +135,22 @@ add_executable(Catelier
 	src/catelier/foundation/concurrent/ConcurrentUnboundedQueue.hpp
 	src/catelier/foundation/concurrent/ConcurrentUnboundedQueue.cpp
 	include/catelier/foundation/concurrent/ConcurrentUnboundedQueue.hpp
+	src/catelier/foundation/concurrent/ConcurrentChainHashMap.hpp
+	src/catelier/foundation/concurrent/ConcurrentChainHashMap.cpp
+	include/catelier/foundation/concurrent/ConcurrentChainHashMap.hpp
 )
+
+
+# === 配置 LTO === #
+if(NOT DEBUG_MODE)
+	include(CheckIPOSupported)
+	check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+	if(IPO_SUPPORTED)
+		set_target_properties(Catelier PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
+	else()
+		message(WARNING "IPO/LTO not supported: ${IPO_ERROR}")
+	endif()
+endif()
 
 
 # === 定义编译器宏 === #

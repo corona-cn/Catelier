@@ -3,6 +3,7 @@
 
 namespace Catelier::src::foundation::concurrent {
     typedef struct ConcurrentUnboundedQueue ConcurrentUnboundedQueue;
+
     typedef struct ConcurrentUnboundedQueueNode ConcurrentUnboundedQueueNode;
 
     auto ConcurrentUnboundedQueue_construct(usize inElementSize) -> ConcurrentUnboundedQueue*;

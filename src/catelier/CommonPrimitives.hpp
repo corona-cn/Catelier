@@ -17,6 +17,7 @@ namespace Catelier {
     using u64 = uint64_t;
 
     using uint = unsigned int;
+    using ulong = unsigned long;
 
 
     /* === 基本大小类型别名 === */

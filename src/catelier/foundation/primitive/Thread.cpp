@@ -70,7 +70,7 @@ namespace Catelier::src::foundation::primitive {
         context->entry = entry;
         context->userData = userData;
 
-        const uintptr_t handle = _beginthreadex(nullptr, 0, threadEntryBridge, context, 0, nullptr);
+        const addr handle = _beginthreadex(nullptr, 0, threadEntryBridge, context, 0, nullptr);
         if (handle == 0) {
             free(context);
             return false;
