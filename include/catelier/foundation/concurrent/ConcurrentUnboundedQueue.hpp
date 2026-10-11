@@ -3,7 +3,7 @@
 
 #include <cstdlib>
 
-namespace Catelier::foundation::concurrent {
+namespace Catelier::include::foundation::concurrent {
     template<typename Type>
     class ConcurrentUnboundedQueue {
         public:

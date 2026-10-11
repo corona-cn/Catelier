@@ -4,7 +4,7 @@
 
 #include "../../../src/catelier/foundation/BinarySearchTree.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     struct BinarySearchTree_AscendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {

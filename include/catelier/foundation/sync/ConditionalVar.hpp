@@ -2,7 +2,7 @@
 #include "../../../../src/catelier/foundation/sync/ConditionalVar.hpp"
 #include "../primitive/Mutex.hpp"
 
-namespace Catelier::foundation::sync {
+namespace Catelier::include::foundation::sync {
     class ConditionalVar {
         public:
             explicit ConditionalVar() {

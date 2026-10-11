@@ -1,5 +1,6 @@
 #pragma once
 #include "../../CommonPrimitives.hpp"
+#include "../primitive/Atomic.hpp"
 #include "../primitive/Mutex.hpp"
 #include "ConditionalVar.hpp"
 
@@ -7,7 +8,9 @@ namespace Catelier::src::foundation::sync {
     typedef struct ConflatedSignal {
         primitive::Mutex mutex;
         ConditionalVar condition;
+        primitive::Atomic waiterCount;
         bool pending;
+        bool closed;
         bool valid;
     } ConflatedSignal;
 

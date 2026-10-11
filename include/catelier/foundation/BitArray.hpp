@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../src/catelier/foundation/BitArray.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     class BitArray {
         public:
             explicit BitArray(const usize initialCapacity = 8) {

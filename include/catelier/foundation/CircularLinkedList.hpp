@@ -5,7 +5,7 @@
 
 #include "../../../src/catelier/foundation/CircularLinkedList.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     auto CircularLinkedList_defaultDataEquals(const void* a, const void* b) -> bool {
         return *((const Type*) a) == *((const Type*) b);

@@ -4,7 +4,7 @@
 
 #include "../../../src/catelier/foundation/UnboundedQueue.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     class UnboundedQueue {
         public:

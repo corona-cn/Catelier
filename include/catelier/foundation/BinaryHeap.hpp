@@ -4,7 +4,7 @@
 
 #include "../../../src/catelier/foundation/BinaryHeap.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     struct BinaryHeap_AscendingComparator {
         auto operator()(const Type& a, const Type& b) const -> bool {

@@ -5,7 +5,7 @@
 
 #include "../../../src/catelier/foundation/UnboundedDeque.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     class UnboundedDeque {
         public:

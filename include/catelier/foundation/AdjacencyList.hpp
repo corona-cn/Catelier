@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../src/catelier/foundation/AdjacencyList.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::foundation {
     template<typename Edge>
     class AdjacencyList {
         public:

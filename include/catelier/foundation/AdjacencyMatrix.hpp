@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../src/catelier/foundation/AdjacencyMatrix.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Edge>
     class AdjacencyMatrix {
         public:

@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../../src/catelier/foundation/primitive/Mutex.hpp"
 
-namespace Catelier::foundation::primitive {
+namespace Catelier::include::foundation::primitive {
     class Mutex {
         public:
             class Guard {

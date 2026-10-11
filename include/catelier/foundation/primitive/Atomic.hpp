@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-namespace Catelier::foundation::primitive {
+namespace Catelier::include::foundation::primitive {
     template<typename Type>
     class Atomic {
         public:

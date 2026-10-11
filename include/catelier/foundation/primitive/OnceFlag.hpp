@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../../src/catelier/foundation/primitive/OnceFlag.hpp"
 
-namespace Catelier::foundation::primitive {
+namespace Catelier::include::foundation::primitive {
     class OnceFlag {
         public:
             explicit OnceFlag() {

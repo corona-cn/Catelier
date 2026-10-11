@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../../src/catelier/foundation/primitive/ThreadKey.hpp"
 
-namespace Catelier::foundation::primitive {
+namespace Catelier::include::foundation::primitive {
     class ThreadKey {
         public:
             explicit ThreadKey(void (*destructor)(void* value) = nullptr) {

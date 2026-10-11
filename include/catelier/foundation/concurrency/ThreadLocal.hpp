@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../../src/catelier/foundation/concurrency/ThreadLocal.hpp"
 
-namespace Catelier::foundation::concurrency {
+namespace Catelier::include::foundation::concurrency {
     class ThreadLocal {
         public:
             explicit ThreadLocal(

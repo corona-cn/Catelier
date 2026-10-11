@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../src/catelier/foundation/UnionFind.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     class UnionFind {
         public:
             explicit UnionFind(const usize inCapacity) {

@@ -1,25 +1,32 @@
 #include "ConflatedSignal.hpp"
 
+#include "../primitive/Thread.hpp"
+
 #ifdef _WIN32
+
 #include <windows.h>
+
 #else
+
 #include <time.h>
+
 #endif
 
 namespace Catelier::src::foundation::sync {
     namespace {
-        #ifdef _WIN32
         auto currentTimeMs() -> u64 {
+            #ifdef _WIN32
+
             return (u64) GetTickCount64();
-        }
-        #else
-        auto currentTimeMs() -> u64 {
+
+            #else
+
             struct timespec ts;
             clock_gettime(CLOCK_MONOTONIC, &ts);
-
             return (u64) ts.tv_sec * 1000ULL + (u64) ts.tv_nsec / 1000000ULL;
+
+            #endif
         }
-        #endif
     }
 
     auto ConflatedSignal_init(ConflatedSignal* self) -> bool {
@@ -29,13 +36,20 @@ namespace Catelier::src::foundation::sync {
 
         self->valid = false;
         self->pending = false;
+        self->closed = false;
+
+        if (!primitive::Atomic_init(&self->waiterCount, 0)) {
+            return false;
+        }
 
         if (!primitive::Mutex_init(&self->mutex)) {
+            primitive::Atomic_destroy(&self->waiterCount);
             return false;
         }
 
         if (!ConditionalVar_init(&self->condition)) {
             primitive::Mutex_destroy(&self->mutex);
+            primitive::Atomic_destroy(&self->waiterCount);
             return false;
         }
 
@@ -48,10 +62,20 @@ namespace Catelier::src::foundation::sync {
             return false;
         }
 
+        self->valid = false;
+
+        primitive::Mutex_lock(&self->mutex);
+        self->closed = true;
+        ConditionalVar_broadcast(&self->condition);
+        primitive::Mutex_unlock(&self->mutex);
+
+        while (primitive::Atomic_load(&self->waiterCount, primitive::MEMORY_ORDER_ACQUIRE) > 0) {
+            primitive::Thread_yield();
+        }
+
         ConditionalVar_destroy(&self->condition);
         primitive::Mutex_destroy(&self->mutex);
-
-        self->valid = false;
+        primitive::Atomic_destroy(&self->waiterCount);
 
         return true;
     }
@@ -63,7 +87,7 @@ namespace Catelier::src::foundation::sync {
 
         primitive::Mutex_lock(&self->mutex);
 
-        if (!self->pending) {
+        if (!self->closed && !self->pending) {
             self->pending = true;
             ConditionalVar_signal(&self->condition);
         }
@@ -77,13 +101,15 @@ namespace Catelier::src::foundation::sync {
 
         primitive::Mutex_lock(&self->mutex);
 
-        while (!self->pending) {
+        primitive::Atomic_fetchAdd(&self->waiterCount, 1, primitive::MEMORY_ORDER_RELAXED);
+
+        while (!self->pending && !self->closed) {
             ConditionalVar_wait(&self->condition, &self->mutex);
         }
 
-        self->pending = false;
-
         primitive::Mutex_unlock(&self->mutex);
+
+        primitive::Atomic_fetchSub(&self->waiterCount, 1, primitive::MEMORY_ORDER_RELEASE);
     }
     auto ConflatedSignal_timedWait(ConflatedSignal* self, const u64 timeoutMs) -> bool {
         if (!self || !self->valid) {
@@ -92,10 +118,12 @@ namespace Catelier::src::foundation::sync {
 
         primitive::Mutex_lock(&self->mutex);
 
+        primitive::Atomic_fetchAdd(&self->waiterCount, 1, primitive::MEMORY_ORDER_RELAXED);
+
         bool result = true;
         const u64 deadline = currentTimeMs() + timeoutMs;
 
-        while (!self->pending) {
+        while (!self->pending && !self->closed) {
             const u64 now = currentTimeMs();
             if (now >= deadline) {
                 result = false;
@@ -106,11 +134,15 @@ namespace Catelier::src::foundation::sync {
             ConditionalVar_timedWait(&self->condition, &self->mutex, remaining);
         }
 
-        if (result) {
+        if (self->closed) {
+            result = false;
+        } else if (result) {
             self->pending = false;
         }
 
         primitive::Mutex_unlock(&self->mutex);
+
+        primitive::Atomic_fetchSub(&self->waiterCount, 1, primitive::MEMORY_ORDER_RELEASE);
 
         return result;
     }

@@ -6,7 +6,7 @@
 #include "../../../src/catelier/foundation/ChainHashMap.hpp"
 #include "../../../src/catelier/util/HashUtils.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Key>
     auto ChainHashMap_defaultHash(const void* key) -> u64 {
         return src::util::hash::FNV1a::hash64Mem(key, sizeof(Key));

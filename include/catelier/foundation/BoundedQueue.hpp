@@ -4,7 +4,7 @@
 
 #include "../../../src/catelier/foundation/BoundedQueue.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     class BoundedQueue {
         public:

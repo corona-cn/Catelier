@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../src/catelier/foundation/HeapString.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     class HeapString {
         public:
             explicit HeapString() {

@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../src/catelier/foundation/BitSet.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     class BitSet {
         public:
             explicit BitSet(const usize initialCapacity = 8) {

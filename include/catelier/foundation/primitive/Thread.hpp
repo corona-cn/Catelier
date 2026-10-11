@@ -3,7 +3,7 @@
 
 #include <exception>
 
-namespace Catelier::foundation::primitive {
+namespace Catelier::include::foundation::primitive {
     class Thread {
         public:
             explicit Thread() {

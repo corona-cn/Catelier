@@ -3,7 +3,7 @@
 
 #include "../../../src/catelier/foundation/SinglyLinkedList.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     auto SinglyLinkedList_defaultDataEquals(const void* a, const void* b) -> bool {
         return *((const Type*) a) == *((const Type*) b);

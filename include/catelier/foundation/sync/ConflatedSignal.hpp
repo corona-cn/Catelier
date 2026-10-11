@@ -1,7 +1,7 @@
 #pragma once
 #include "../../../../src/catelier/foundation/sync/ConflatedSignal.hpp"
 
-namespace Catelier::foundation::sync {
+namespace Catelier::include::foundation::sync {
     class ConflatedSignal {
         public:
             explicit ConflatedSignal() {

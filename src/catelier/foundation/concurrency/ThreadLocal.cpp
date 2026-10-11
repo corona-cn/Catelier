@@ -69,7 +69,7 @@ namespace Catelier::src::foundation::concurrency {
     }
 
     namespace {
-        auto threadLocalHash(u64 generation) -> usize {
+        auto threadLocalHash(const u64 generation) -> usize {
             return (usize) generation * (usize) 0x9E3779B97F4A7C15ULL;
         }
 

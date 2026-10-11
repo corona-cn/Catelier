@@ -4,7 +4,7 @@
 
 #include "../../../src/catelier/foundation/RingBuffer.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     class RingBuffer {
         public:

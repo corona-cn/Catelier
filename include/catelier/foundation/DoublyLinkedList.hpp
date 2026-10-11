@@ -3,7 +3,7 @@
 
 #include "../../../src/catelier/foundation/DoublyLinkedList.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     auto DoublyLinkedList_defaultDataEquals(const void* a, const void* b) -> bool {
         return *((const Type*) a) == *((const Type*) b);

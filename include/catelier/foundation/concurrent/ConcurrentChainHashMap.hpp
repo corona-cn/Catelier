@@ -2,7 +2,7 @@
 #include "../../../../src/catelier/foundation/concurrent/ConcurrentChainHashMap.hpp"
 #include "../../../../src/catelier/util/HashUtils.hpp"
 
-namespace Catelier::foundation::concurrent {
+namespace Catelier::include::foundation::concurrent {
     template<typename Key>
     auto ConcurrentChainHashMap_defaultHash(const void* key) -> u64 {
         return src::util::hash::FNV1a::hash64Mem(key, sizeof(Key));

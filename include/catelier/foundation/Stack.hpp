@@ -4,7 +4,7 @@
 
 #include "../../../src/catelier/foundation/Stack.hpp"
 
-namespace Catelier::foundation {
+namespace Catelier::include::oundation {
     template<typename Type>
     class Stack {
         public:
