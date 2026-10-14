@@ -30,6 +30,8 @@ namespace Catelier::src::architecture::imp {
             ElementState* elementStates;
             u64 elementCount;
 
+            bool isTainted;
+
             bool isValid;
         } ElementChunk;
 
@@ -110,6 +112,7 @@ namespace Catelier::src::architecture::imp {
             self->elements = statefulElement;
             self->elementStates = (ElementState*) (statefulElement + elementsByteSize);
             self->elementCount = 0;
+            self->isTainted = false;
             self->isValid = true;
 
             return self;
@@ -939,6 +942,9 @@ namespace Catelier::src::architecture::imp {
                         const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
                         if (self->elementEquals ? self->elementEquals(candidateElement, inElement) : (memcmp(candidateElement, inElement, self->elementSize) == 0)) {
                             foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&currentChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                             break;
                         }
@@ -959,6 +965,9 @@ namespace Catelier::src::architecture::imp {
                         const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
                         if (self->elementEquals ? self->elementEquals(candidateElement, inElement) : (memcmp(candidateElement, inElement, self->elementSize) == 0)) {
                             foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&sealedChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                             break;
                         }
@@ -1009,6 +1018,9 @@ namespace Catelier::src::architecture::imp {
                             const bool isMatch = self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0);
                             if (isMatch) {
                                 foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                                if (!foundation::primitive::AtomicBool_load(&currentChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                    foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                                }
                                 removed = true;
                                 break;
                             }
@@ -1033,6 +1045,9 @@ namespace Catelier::src::architecture::imp {
                             const bool isMatch = self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0);
                             if (isMatch) {
                                 foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                                if (!foundation::primitive::AtomicBool_load(&sealedChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                    foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                                }
                                 removed = true;
                                 break;
                             }
@@ -1081,6 +1096,9 @@ namespace Catelier::src::architecture::imp {
                         const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
                         if (inPredicate(candidateElement, inPredicateContext)) {
                             foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&currentChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                         }
                     }
@@ -1100,6 +1118,9 @@ namespace Catelier::src::architecture::imp {
                         const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
                         if (inPredicate(candidateElement, inPredicateContext)) {
                             foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&sealedChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                         }
                     }
@@ -1157,6 +1178,9 @@ namespace Catelier::src::architecture::imp {
 
                         if (!isFound) {
                             foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&currentChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                         }
                     }
@@ -1187,6 +1211,9 @@ namespace Catelier::src::architecture::imp {
 
                         if (!isFound) {
                             foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&sealedChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                         }
                     }
@@ -1233,6 +1260,9 @@ namespace Catelier::src::architecture::imp {
                         const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
                         if (!inPredicate(candidateElement, inPredicateContext)) {
                             foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&currentChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                         }
                     }
@@ -1252,6 +1282,9 @@ namespace Catelier::src::architecture::imp {
                         const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
                         if (!inPredicate(candidateElement, inPredicateContext)) {
                             foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            if (!foundation::primitive::AtomicBool_load(&sealedChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                                foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                            }
                             removed = true;
                         }
                     }
@@ -1294,6 +1327,9 @@ namespace Catelier::src::architecture::imp {
                         }
 
                         foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                        if (!foundation::primitive::AtomicBool_load(&currentChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                        }
                     }
                 }
             }
@@ -1309,6 +1345,9 @@ namespace Catelier::src::architecture::imp {
                         }
 
                         foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                        if (!foundation::primitive::AtomicBool_load(&sealedChunk->isTainted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
+                        }
                     }
                 }
 
@@ -1616,10 +1655,31 @@ namespace Catelier::src::architecture::imp {
             for (usize s = 0; s < sourceCount; ++s) {
                 const auto* const chunk = sourceChunks[s];
                 const usize elementCount = sourceElementCounts[s];
-                for (usize i = 0; i < elementCount; ++i) {
-                    if (foundation::primitive::Atomic8_load((const u8*) &chunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) == ElementState::VALID) {
-                        memcpy(newPresentElements + writeIndex * self->elementSize, chunk->elements + i * self->elementSize, self->elementSize);
-                        writeIndex++;
+                if (elementCount == 0) {
+                    continue;
+                }
+
+                if (!foundation::primitive::AtomicBool_load(&chunk->isTainted, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    memcpy(newPresentElements + writeIndex * self->elementSize, chunk->elements, elementCount * self->elementSize);
+                    writeIndex += elementCount;
+                } else {
+                    usize i = 0;
+                    while (i < elementCount) {
+                        while (i < elementCount && foundation::primitive::Atomic8_load((const u8*) &chunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
+                            i++;
+                        }
+
+                        const usize runStart = i;
+
+                        while (i < elementCount && foundation::primitive::Atomic8_load((const u8*) &chunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) == ElementState::VALID) {
+                            i++;
+                        }
+
+                        const usize runLength = i - runStart;
+                        if (runLength > 0) {
+                            memcpy(newPresentElements + writeIndex * self->elementSize, chunk->elements + runStart * self->elementSize, runLength * self->elementSize);
+                            writeIndex += runLength;
+                        }
                     }
                 }
             }
@@ -1673,8 +1733,10 @@ namespace Catelier::src::architecture::imp {
         const usize ingestSizeAfter = IMPList_ingestElementCount(self);
         if (ingestSizeAfter == ingestSizeBefore) {
             foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
+
             foundation::primitive::AtomicBool_store(&self->isMergePending, false, foundation::primitive::MemoryOrder::RELEASE);
             foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
+
             foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
         }
 
