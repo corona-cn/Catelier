@@ -17,6 +17,7 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_presentElements(const IMPList* self) -> const u8*;
     auto IMPList_presentElementsCopy(const IMPList* self, u8** outElements, usize* outElementCount) -> bool;
     auto IMPList_presentElementCount(const IMPList* self) -> usize;
+    auto IMPList_presentElementsSpan(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
     auto IMPList_ingestElementCount(const IMPList* self) -> usize;
     auto IMPList_mergeElementCount(const IMPList* self) -> usize;
     auto IMPList_mergeCount(const IMPList* self) -> usize;

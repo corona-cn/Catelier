@@ -1,11 +1,15 @@
 #include "ConditionalVar.hpp"
 
 #ifdef _WIN32
+
 #include <windows.h>
+
 #else
+
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
+
 #endif
 
 namespace Catelier::src::foundation::sync {

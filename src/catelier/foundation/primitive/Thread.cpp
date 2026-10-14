@@ -1,12 +1,16 @@
 #include "Thread.hpp"
 
 #ifdef _WIN32
+
 #include <windows.h>
 #include <process.h>
+
 #else
+
 #include <pthread.h>
 #include <sched.h>
 #include <cstring>
+
 #endif
 
 namespace Catelier::src::foundation::primitive {

@@ -20,36 +20,40 @@ namespace Catelier::src::architecture::imp {
 
     namespace {
         typedef enum ElementState : u8 {
-            ELEMENT_STATE_EMPTY = 0,
-            ELEMENT_STATE_VALID = 1,
-            ELEMENT_STATE_TOMBSTONE = 2,
+            EMPTY = 0,
+            VALID = 1,
+            TOMBSTONE = 2,
         } ElementState;
 
         typedef struct ElementChunk {
             u8* elements;
             ElementState* elementStates;
-            foundation::primitive::Atomic elementCount;
+            u64 elementCount;
 
-            foundation::primitive::Atomic isValid;
+            bool isValid;
         } ElementChunk;
 
         typedef struct ElementChunkBundle {
-            foundation::primitive::Atomic currentChunk;
+            ElementChunk* currentChunk;
             foundation::concurrent::ConcurrentUnboundedQueue* sealedChunks;
         } ElementChunkBundle;
 
         typedef struct ElementChunkBundleThreadLocalSetEntry {
             struct ElementChunkBundleThreadLocalSet* owner;
             ElementChunkBundle* bundle;
-            ElementChunkBundleThreadLocalSetEntry* nextInThread;
-            ElementChunkBundleThreadLocalSetEntry* nextInOwner;
+
+            ElementChunkBundleThreadLocalSetEntry* nextEntryInThread;
+            ElementChunkBundleThreadLocalSetEntry* nextEntryInOwner;
+
             bool isThreadExited;
         } ElementChunkBundleThreadLocalSetEntry;
 
         typedef struct ElementChunkBundleThreadLocalSet {
-            ElementChunkBundleThreadLocalSetEntry* head;
+            ElementChunkBundleThreadLocalSetEntry* headEntry;
+
             void (*threadExitCallback)(void* inThreadExitCallbackContext);
             void* threadExitCallbackContext;
+
             bool isValid;
         } ElementChunkBundleThreadLocalSet;
     }
@@ -72,16 +76,17 @@ namespace Catelier::src::architecture::imp {
 
         ElementChunkBundleThreadLocalSet chunkBundleThreadLocalSet;
 
-        foundation::primitive::Atomic isMergePending;
+        bool isMergePending;
         foundation::primitive::Thread maintenanceThread;
-        foundation::primitive::Atomic isMaintenanceThreadActive;
+        bool isMaintenanceThreadActive;
         foundation::sync::ConflatedSignal maintenanceTrigger;
 
         foundation::primitive::Mutex awaitMergingMutex;
         foundation::sync::ConditionalVar awaitMergingCondition;
+        foundation::primitive::Mutex mergeMutex;
 
-        foundation::primitive::Atomic mergeCount;
-        foundation::primitive::Atomic lastMergeDurationMs;
+        u64 mergeCount;
+        u64 lastMergeDurationMs;
     } IMPList;
 
     namespace {
@@ -104,29 +109,15 @@ namespace Catelier::src::architecture::imp {
 
             self->elements = statefulElement;
             self->elementStates = (ElementState*) (statefulElement + elementsByteSize);
-
-            if (!foundation::primitive::Atomic_init(&self->elementCount, 0)) {
-                free(statefulElement);
-                free(self);
-                return nullptr;
-            }
-
-            if (!foundation::primitive::Atomic_init(&self->isValid, 1)) {
-                foundation::primitive::Atomic_destroy(&self->elementCount);
-                free(statefulElement);
-                free(self);
-                return nullptr;
-            }
+            self->elementCount = 0;
+            self->isValid = true;
 
             return self;
         }
-        auto ElementChunk_destruct(ElementChunk* self) -> bool {
+        auto ElementChunk_destruct(ElementChunk* const self) -> bool {
             if (!self) {
                 return false;
             }
-
-            foundation::primitive::Atomic_destroy(&self->isValid);
-            foundation::primitive::Atomic_destroy(&self->elementCount);
 
             if (self->elements) {
                 free(self->elements);
@@ -145,30 +136,25 @@ namespace Catelier::src::architecture::imp {
                 return nullptr;
             }
 
-            if (!foundation::primitive::Atomic_init(&self->currentChunk, 0)) {
-                free(self);
-                return nullptr;
-            }
+            self->currentChunk = nullptr;
 
             self->sealedChunks = foundation::concurrent::ConcurrentUnboundedQueue_construct(sizeof(ElementChunk*));
             if (!self->sealedChunks) {
-                foundation::primitive::Atomic_destroy(&self->currentChunk);
                 free(self);
                 return nullptr;
             }
 
             return self;
         }
-        auto ElementChunkBundle_destruct(ElementChunkBundle* self) -> bool {
+        auto ElementChunkBundle_destruct(ElementChunkBundle* const self) -> bool {
             if (!self) {
                 return false;
             }
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&self->currentChunk, foundation::primitive::MEMORY_ORDER_RELAXED);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &self->currentChunk, foundation::primitive::MemoryOrder::RELAXED);
             if (currentChunk) {
                 ElementChunk_destruct(currentChunk);
             }
-            foundation::primitive::Atomic_destroy(&self->currentChunk);
 
             if (self->sealedChunks) {
                 auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(self->sealedChunks);
@@ -189,11 +175,11 @@ namespace Catelier::src::architecture::imp {
 
             return true;
         }
-        auto ElementChunkBundle_threadExitCallback(void* inThreadExitCallbackContext) -> void {
+        auto ElementChunkBundle_threadExitCallback(void* const inThreadExitCallbackContext) -> void {
             auto* const self = (IMPList*) inThreadExitCallbackContext;
-            if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-                u64 expected = 0;
-                if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expected = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -204,7 +190,7 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::ThreadKey ElementChunkBundleThreadLocalSet_entryRegistryKey = {};
         foundation::primitive::OnceFlag ElementChunkBundleThreadLocalSet_entryRegistryKeyOnceFlag = {};
         foundation::primitive::Mutex ElementChunkBundleThreadLocalSet_entryRegistryMutex = {};
-        foundation::primitive::Atomic ElementChunkBundleThreadLocalSet_entryRegistryInitGuard = {};
+        u64 ElementChunkBundleThreadLocalSet_entryRegistryInitGuard = {};
 
         auto ElementChunkBundleThreadLocalSet_threadExitCallback(void* inEntry) -> void;
 
@@ -213,39 +199,37 @@ namespace Catelier::src::architecture::imp {
             foundation::primitive::ThreadKey_init(&ElementChunkBundleThreadLocalSet_entryRegistryKey, ElementChunkBundleThreadLocalSet_threadExitCallback);
         }
 
-        auto ElementChunkBundleThreadLocalSet_ensureRegistryInit() -> void {
-            u64 expected = 0;
-            if (foundation::primitive::Atomic_compareExchange(&ElementChunkBundleThreadLocalSet_entryRegistryInitGuard, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
-                foundation::primitive::OnceFlag_init(&ElementChunkBundleThreadLocalSet_entryRegistryKeyOnceFlag);
-            }
-
-            foundation::primitive::OnceFlag_do(&ElementChunkBundleThreadLocalSet_entryRegistryKeyOnceFlag, ElementChunkBundleThreadLocalSet_initRegistryKey);
-        }
-
-        auto ElementChunkBundleThreadLocalSet_construct(ElementChunkBundleThreadLocalSet* self, void (*inThreadExitCallback)(void* inThreadExitCallbackContext), void* inThreadExitCallbackContext) -> bool {
+        auto ElementChunkBundleThreadLocalSet_construct(ElementChunkBundleThreadLocalSet* const self, void (*inThreadExitCallback)(void* inThreadExitCallbackContext), void* const inThreadExitCallbackContext) -> bool {
             if (!self) {
                 return false;
             }
 
-            ElementChunkBundleThreadLocalSet_ensureRegistryInit();
+            u64 expected = 0;
+            if (foundation::primitive::Atomic64_compareExchange(&ElementChunkBundleThreadLocalSet_entryRegistryInitGuard, &expected, 1, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                foundation::primitive::OnceFlag_init(&ElementChunkBundleThreadLocalSet_entryRegistryKeyOnceFlag);
+            }
 
-            self->head = nullptr;
+            foundation::primitive::OnceFlag_do(&ElementChunkBundleThreadLocalSet_entryRegistryKeyOnceFlag, ElementChunkBundleThreadLocalSet_initRegistryKey);
+
+            self->headEntry = nullptr;
             self->threadExitCallback = inThreadExitCallback;
             self->threadExitCallbackContext = inThreadExitCallbackContext;
             self->isValid = true;
 
             return true;
         }
-        auto ElementChunkBundleThreadLocalSet_destruct(ElementChunkBundleThreadLocalSet* self) -> bool {
+        auto ElementChunkBundleThreadLocalSet_destruct(ElementChunkBundleThreadLocalSet* const self) -> bool {
             if (!self || !self->isValid) {
                 return false;
             }
 
+            foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
+
             self->isValid = false;
 
-            auto* entry = self->head;
+            auto* entry = self->headEntry;
             while (entry) {
-                auto* const nextEntry = entry->nextInOwner;
+                auto* const nextEntry = entry->nextEntryInOwner;
 
                 ElementChunkBundle_destruct(entry->bundle);
 
@@ -258,12 +242,14 @@ namespace Catelier::src::architecture::imp {
                 entry = nextEntry;
             }
 
-            self->head = nullptr;
+            self->headEntry = nullptr;
+
+            foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
             return true;
         }
 
-        auto ElementChunkBundleThreadLocalSet_getOrCreate(ElementChunkBundleThreadLocalSet* self) -> ElementChunkBundle* {
+        auto ElementChunkBundleThreadLocalSet_getOrCreate(ElementChunkBundleThreadLocalSet* const self) -> ElementChunkBundle* {
             if (!self || !self->isValid) {
                 return nullptr;
             }
@@ -275,11 +261,11 @@ namespace Catelier::src::architecture::imp {
                 }
 
                 auto* prev = entry;
-                auto* current = entry->nextInThread;
+                auto* current = entry->nextEntryInThread;
                 while (current) {
                     if (current->owner == self) {
-                        prev->nextInThread = current->nextInThread;
-                        current->nextInThread = entry;
+                        prev->nextEntryInThread = current->nextEntryInThread;
+                        current->nextEntryInThread = entry;
 
                         foundation::primitive::ThreadKey_set(&ElementChunkBundleThreadLocalSet_entryRegistryKey, current);
 
@@ -287,7 +273,7 @@ namespace Catelier::src::architecture::imp {
                     }
 
                     prev = current;
-                    current = current->nextInThread;
+                    current = current->nextEntryInThread;
                 }
             }
 
@@ -306,7 +292,7 @@ namespace Catelier::src::architecture::imp {
             newEntry->bundle = bundle;
             newEntry->isThreadExited = false;
 
-            newEntry->nextInThread = entry;
+            newEntry->nextEntryInThread = entry;
             if (!foundation::primitive::ThreadKey_set(&ElementChunkBundleThreadLocalSet_entryRegistryKey, newEntry)) {
                 free(newEntry);
                 ElementChunkBundle_destruct(bundle);
@@ -315,81 +301,52 @@ namespace Catelier::src::architecture::imp {
 
             foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-            newEntry->nextInOwner = self->head;
-            self->head = newEntry;
+            newEntry->nextEntryInOwner = self->headEntry;
+            self->headEntry = newEntry;
 
             foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
             return bundle;
         }
 
-        auto ElementChunkBundleThreadLocalSet_remove(ElementChunkBundleThreadLocalSet* self, ElementChunkBundle* inBundle) -> bool {
-            if (!self || !self->isValid || !inBundle) {
-                return false;
-            }
-
-            foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
-
-            ElementChunkBundleThreadLocalSetEntry** link = &self->head;
-            ElementChunkBundleThreadLocalSetEntry* target = nullptr;
-            while (*link) {
-                if ((*link)->bundle == inBundle) {
-                    target = *link;
-                    *link = target->nextInOwner;
-                    break;
-                }
-
-                link = &(*link)->nextInOwner;
-            }
-
-            foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
-
-            if (!target) {
-                return false;
-            }
-
-            ElementChunkBundle_destruct(target->bundle);
-            free(target);
-
-            return true;
-        }
-
-        auto ElementChunkBundleThreadLocalSet_forEach(const ElementChunkBundleThreadLocalSet* self, void (*action)(ElementChunkBundle* inBundle, bool inIsThreadExited, void* inActionContext), void* inActionContext) -> void {
+        auto ElementChunkBundleThreadLocalSet_forEach(const ElementChunkBundleThreadLocalSet* const self, void (*action)(ElementChunkBundle* inBundle, bool inIsThreadExited, void* inActionContext), void* const inActionContext) -> void {
             if (!self || !self->isValid || !action) {
                 return;
             }
 
             foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-            for (auto* entry = self->head; entry; entry = entry->nextInOwner) {
+            for (auto* entry = self->headEntry; entry; entry = entry->nextEntryInOwner) {
                 action(entry->bundle, entry->isThreadExited, inActionContext);
             }
 
             foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
         }
 
-        auto ElementChunkBundleThreadLocalSet_threadExitCallback(void* inEntry) -> void {
+        auto ElementChunkBundleThreadLocalSet_threadExitCallback(void* const inEntry) -> void {
             auto* entry = (ElementChunkBundleThreadLocalSetEntry*) inEntry;
 
             while (entry) {
-                auto* const nextEntry = entry->nextInThread;
-                auto* const self = entry->owner;
+                auto* const nextEntry = entry->nextEntryInThread;
 
+                foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
+
+                auto* const self = entry->owner;
                 if (!self) {
+                    foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
+
                     free(entry);
                     entry = nextEntry;
                     continue;
                 }
 
                 auto* const bundle = entry->bundle;
-                auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
                 if (currentChunk) {
-                    u64 expected = (u64) (addr) currentChunk;
-                    if (foundation::primitive::Atomic_compareExchange(&bundle->currentChunk, &expected, 0, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
-                        foundation::primitive::Atomic_store(&currentChunk->isValid, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
-
-                        ElementChunk* const chunkToSeal = currentChunk;
-                        foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &chunkToSeal);
+                    auto* expected = (void*) currentChunk;
+                    if (foundation::primitive::AtomicPtr_compareExchange((void**) &bundle->currentChunk, &expected, nullptr, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                        foundation::primitive::AtomicBool_store(&currentChunk->isValid, false, foundation::primitive::MemoryOrder::RELEASE);
+                        foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &currentChunk);
                     }
                 }
 
@@ -399,38 +356,50 @@ namespace Catelier::src::architecture::imp {
                     self->threadExitCallback(self->threadExitCallbackContext);
                 }
 
+                foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
+
                 entry = nextEntry;
             }
         }
     }
 
     namespace {
-        auto IMPList_maintenanceEntry(void* inSelf) -> void {
+        auto IMPList_maintenanceEntry(void* const inSelf) -> void {
             auto* const self = (IMPList*) inSelf;
-            while (foundation::primitive::Atomic_load(&self->isMaintenanceThreadActive, foundation::primitive::MEMORY_ORDER_ACQUIRE)) {
+            while (foundation::primitive::AtomicBool_load(&self->isMaintenanceThreadActive, foundation::primitive::MemoryOrder::ACQUIRE)) {
                 foundation::sync::ConflatedSignal_timedWait(&self->maintenanceTrigger, self->propagationDurationMs);
 
-                if (!foundation::primitive::Atomic_load(&self->isMaintenanceThreadActive, foundation::primitive::MEMORY_ORDER_ACQUIRE)) {
+                if (!foundation::primitive::AtomicBool_load(&self->isMaintenanceThreadActive, foundation::primitive::MemoryOrder::ACQUIRE)) {
                     break;
                 }
 
-                if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_ACQUIRE)) {
+                if (foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::ACQUIRE)) {
                     IMPList_merge(self);
                 }
             }
         }
 
-        auto IMPList_countIngestElement(ElementChunkBundle* inBundle, const bool inIsThreadExited, void* inContext) -> void {
+        auto IMPList_countIngestElement(ElementChunkBundle* const inBundle, const bool inIsThreadExited, void* const inContext) -> void {
             (void) inIsThreadExited;
 
             auto* const total = (usize*) inContext;
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&inBundle->currentChunk, foundation::primitive::MEMORY_ORDER_RELAXED);
 
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &inBundle->currentChunk, foundation::primitive::MemoryOrder::RELAXED);
             if (currentChunk) {
-                *total += (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_RELAXED);
+                *total += (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::RELAXED);
+            }
+
+            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(inBundle->sealedChunks);
+            while (node) {
+                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
+                if (chunk) {
+                    *total += (usize) foundation::primitive::Atomic64_load(&chunk->elementCount, foundation::primitive::MemoryOrder::RELAXED);
+                }
+
+                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
             }
         }
-        auto IMPList_countMergeElement(ElementChunkBundle* inBundle, const bool inIsThreadExited, void* inContext) -> void {
+        auto IMPList_countMergeElement(ElementChunkBundle* const inBundle, const bool inIsThreadExited, void* const inContext) -> void {
             (void) inIsThreadExited;
 
             auto* const total = (usize*) inContext;
@@ -438,14 +407,14 @@ namespace Catelier::src::architecture::imp {
             while (node) {
                 auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
                 if (chunk) {
-                    *total += (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_RELAXED);
+                    *total += (usize) foundation::primitive::Atomic64_load(&chunk->elementCount, foundation::primitive::MemoryOrder::RELAXED);
                 }
 
                 node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
             }
         }
 
-        auto IMPList_retirePresentElements(IMPList* self) -> void {
+        auto IMPList_retirePresentElements(IMPList* const self) -> void {
             if (!self->presentElements) {
                 return;
             }
@@ -490,83 +459,52 @@ namespace Catelier::src::architecture::imp {
             self->retiredPresentElements[i] = nullptr;
         }
 
-        if (!foundation::primitive::Atomic_init(&self->isMergePending, 0)) {
-            free(self);
-            return nullptr;
-        }
-
-        if (!foundation::primitive::Atomic_init(&self->mergeCount, 0)) {
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
-            free(self);
-            return nullptr;
-        }
-
-        if (!foundation::primitive::Atomic_init(&self->lastMergeDurationMs, 0)) {
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
-            free(self);
-            return nullptr;
-        }
+        self->isMergePending = false;
+        self->isMaintenanceThreadActive = true;
+        self->mergeCount = 0;
+        self->lastMergeDurationMs = 0;
 
         if (!foundation::sync::ConflatedSignal_init(&self->maintenanceTrigger)) {
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
-            free(self);
-            return nullptr;
-        }
-
-        if (!foundation::primitive::Atomic_init(&self->isMaintenanceThreadActive, 1)) {
-            foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
             free(self);
             return nullptr;
         }
 
         if (!foundation::primitive::Mutex_init(&self->awaitMergingMutex)) {
-            foundation::primitive::Atomic_destroy(&self->isMaintenanceThreadActive);
             foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
             free(self);
             return nullptr;
         }
 
         if (!foundation::sync::ConditionalVar_init(&self->awaitMergingCondition)) {
             foundation::primitive::Mutex_destroy(&self->awaitMergingMutex);
-            foundation::primitive::Atomic_destroy(&self->isMaintenanceThreadActive);
             foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
+            free(self);
+            return nullptr;
+        }
+
+        if (!foundation::primitive::Mutex_init(&self->mergeMutex)) {
+            foundation::sync::ConditionalVar_destroy(&self->awaitMergingCondition);
+            foundation::primitive::Mutex_destroy(&self->awaitMergingMutex);
+            foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
             free(self);
             return nullptr;
         }
 
         if (!ElementChunkBundleThreadLocalSet_construct(&self->chunkBundleThreadLocalSet, ElementChunkBundle_threadExitCallback, self)) {
+            foundation::primitive::Mutex_destroy(&self->mergeMutex);
             foundation::sync::ConditionalVar_destroy(&self->awaitMergingCondition);
             foundation::primitive::Mutex_destroy(&self->awaitMergingMutex);
-            foundation::primitive::Atomic_destroy(&self->isMaintenanceThreadActive);
             foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
             free(self);
             return nullptr;
         }
 
         if (!foundation::primitive::Thread_init(&self->maintenanceThread)) {
             ElementChunkBundleThreadLocalSet_destruct(&self->chunkBundleThreadLocalSet);
+            foundation::primitive::Mutex_destroy(&self->mergeMutex);
             foundation::sync::ConditionalVar_destroy(&self->awaitMergingCondition);
             foundation::primitive::Mutex_destroy(&self->awaitMergingMutex);
-            foundation::primitive::Atomic_destroy(&self->isMaintenanceThreadActive);
             foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
             free(self);
             return nullptr;
         }
@@ -574,25 +512,22 @@ namespace Catelier::src::architecture::imp {
         if (!foundation::primitive::Thread_start(&self->maintenanceThread, IMPList_maintenanceEntry, self)) {
             foundation::primitive::Thread_destroy(&self->maintenanceThread);
             ElementChunkBundleThreadLocalSet_destruct(&self->chunkBundleThreadLocalSet);
+            foundation::primitive::Mutex_destroy(&self->mergeMutex);
             foundation::sync::ConditionalVar_destroy(&self->awaitMergingCondition);
             foundation::primitive::Mutex_destroy(&self->awaitMergingMutex);
-            foundation::primitive::Atomic_destroy(&self->isMaintenanceThreadActive);
             foundation::sync::ConflatedSignal_destroy(&self->maintenanceTrigger);
-            foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
-            foundation::primitive::Atomic_destroy(&self->mergeCount);
-            foundation::primitive::Atomic_destroy(&self->isMergePending);
             free(self);
             return nullptr;
         }
 
         return self;
     }
-    auto IMPList_destruct(IMPList* self) -> bool {
+    auto IMPList_destruct(IMPList* const self) -> bool {
         if (!self) {
             return false;
         }
 
-        foundation::primitive::Atomic_store(&self->isMaintenanceThreadActive, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
+        foundation::primitive::AtomicBool_store(&self->isMaintenanceThreadActive, false, foundation::primitive::MemoryOrder::RELEASE);
         foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
 
         foundation::primitive::Thread_join(&self->maintenanceThread);
@@ -612,20 +547,15 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        foundation::primitive::Atomic_destroy(&self->isMaintenanceThreadActive);
-        foundation::primitive::Atomic_destroy(&self->isMergePending);
-
         foundation::sync::ConditionalVar_destroy(&self->awaitMergingCondition);
         foundation::primitive::Mutex_destroy(&self->awaitMergingMutex);
-
-        foundation::primitive::Atomic_destroy(&self->mergeCount);
-        foundation::primitive::Atomic_destroy(&self->lastMergeDurationMs);
+        foundation::primitive::Mutex_destroy(&self->mergeMutex);
 
         free(self);
 
         return true;
     }
-    auto IMPList_copy(const IMPList* self) -> IMPList* {
+    auto IMPList_copy(const IMPList* const self) -> IMPList* {
         if (!self) {
             return nullptr;
         }
@@ -635,8 +565,8 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
-        const u8* const sourceElements = self->presentElements;
-        const usize sourceElementCount = self->presentElementCount;
+        const usize sourceElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const sourceElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
         if (sourceElements && sourceElementCount > 0) {
             const usize presentElementsByteSize = sourceElementCount * self->elementSize;
 
@@ -657,30 +587,45 @@ namespace Catelier::src::architecture::imp {
                 return nullptr;
             }
 
-            auto* const newChunk = ElementChunk_construct(self->elementSize, self->chunkSize);
-            if (!newChunk) {
-                IMPList_destruct(newSelf);
-                return nullptr;
+            const u8* chunkElementCursor = sourceElements;
+            usize remainingElementCount = sourceElementCount;
+            while (remainingElementCount > 0) {
+                auto* const newChunk = ElementChunk_construct(self->elementSize, self->chunkSize);
+                if (!newChunk) {
+                    IMPList_destruct(newSelf);
+                    return nullptr;
+                }
+
+                const usize writeElementCount = remainingElementCount < self->chunkSize ? remainingElementCount : self->chunkSize;
+
+                memcpy(newChunk->elements, chunkElementCursor, writeElementCount * self->elementSize);
+                memset(newChunk->elementStates, ElementState::VALID, writeElementCount);
+
+                foundation::primitive::Atomic64_store(&newChunk->elementCount, writeElementCount, foundation::primitive::MemoryOrder::RELEASE);
+
+                chunkElementCursor += writeElementCount * self->elementSize;
+                remainingElementCount -= writeElementCount;
+
+                if (remainingElementCount > 0) {
+                    foundation::primitive::AtomicBool_store(&newChunk->isValid, false, foundation::primitive::MemoryOrder::RELEASE);
+                    foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &newChunk);
+                } else {
+                    foundation::primitive::AtomicPtr_store((void**) &bundle->currentChunk, (void*) newChunk, foundation::primitive::MemoryOrder::RELEASE);
+                }
             }
-
-            memcpy(newChunk->elements, sourceElements, presentElementsByteSize);
-            memset(newChunk->elementStates, ELEMENT_STATE_VALID, sourceElementCount);
-
-            foundation::primitive::Atomic_store(&newChunk->elementCount, sourceElementCount, foundation::primitive::MEMORY_ORDER_RELEASE);
-            foundation::primitive::Atomic_store(&bundle->currentChunk, (u64) (addr) newChunk, foundation::primitive::MEMORY_ORDER_RELEASE);
         }
 
         return newSelf;
     }
 
-    auto IMPList_presentElements(const IMPList* self) -> const u8* {
+    auto IMPList_presentElements(const IMPList* const self) -> const u8* {
         if (!self) {
             return nullptr;
         }
 
-        return self->presentElements;
+        return (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
     }
-    auto IMPList_presentElementsCopy(const IMPList* self, u8** outElements, usize* outElementCount) -> bool {
+    auto IMPList_presentElementsCopy(const IMPList* const self, const u8** const outElements, usize* const outElementCount) -> bool {
         if (!self || !outElements || !outElementCount) {
             return false;
         }
@@ -688,8 +633,8 @@ namespace Catelier::src::architecture::imp {
         *outElements = nullptr;
         *outElementCount = 0;
 
-        const u8* const presentElements = self->presentElements;
-        const usize presentElementCount = self->presentElementCount;
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
 
         if (!presentElements || presentElementCount == 0) {
             return true;
@@ -709,14 +654,30 @@ namespace Catelier::src::architecture::imp {
 
         return true;
     }
-    auto IMPList_presentElementCount(const IMPList* self) -> usize {
+    auto IMPList_presentElementCount(const IMPList* const self) -> usize {
         if (!self) {
             return 0;
         }
 
-        return self->presentElementCount;
+        return (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
     }
-    auto IMPList_ingestElementCount(const IMPList* self) -> usize {
+    auto IMPList_presentElementsSpan(const IMPList* const self, const u8** const outElements, usize* const outElementCount) -> bool {
+        if (!self || !outElements || !outElementCount) {
+            return false;
+        }
+
+        *outElements = nullptr;
+        *outElementCount = 0;
+
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
+
+        *outElements = presentElements;
+        *outElementCount = presentElementCount;
+
+        return true;
+    }
+    auto IMPList_ingestElementCount(const IMPList* const self) -> usize {
         if (!self) {
             return 0;
         }
@@ -726,7 +687,7 @@ namespace Catelier::src::architecture::imp {
 
         return total;
     }
-    auto IMPList_mergeElementCount(const IMPList* self) -> usize {
+    auto IMPList_mergeElementCount(const IMPList* const self) -> usize {
         if (!self) {
             return 0;
         }
@@ -736,97 +697,128 @@ namespace Catelier::src::architecture::imp {
 
         return total;
     }
-    auto IMPList_mergeCount(const IMPList* self) -> usize {
+    auto IMPList_mergeCount(const IMPList* const self) -> usize {
         if (!self) {
             return 0;
         }
 
-        return (usize) foundation::primitive::Atomic_load(&self->mergeCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+        return (usize) foundation::primitive::Atomic64_load(&self->mergeCount, foundation::primitive::MemoryOrder::ACQUIRE);
     }
-    auto IMPList_lastMergeDurationMs(const IMPList* self) -> usize {
+    auto IMPList_lastMergeDurationMs(const IMPList* const self) -> usize {
         if (!self) {
             return 0;
         }
 
-        return (usize) foundation::primitive::Atomic_load(&self->lastMergeDurationMs, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+        return (usize) foundation::primitive::Atomic64_load(&self->lastMergeDurationMs, foundation::primitive::MemoryOrder::ACQUIRE);
     }
 
-    auto IMPList_get(const IMPList* self, const usize index) -> const void* {
-        if (!self || index >= self->presentElementCount) {
+    auto IMPList_get(const IMPList* const self, const usize index) -> const void* {
+        if (!self || index >= (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE)) {
             return nullptr;
         }
 
-        return self->presentElements + (index * self->elementSize);
+        return (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE) + (index * self->elementSize);
     }
-    auto IMPList_first(const IMPList* self) -> const void* {
-        if (!self || self->presentElementCount == 0) {
+    auto IMPList_first(const IMPList* const self) -> const void* {
+        if (!self || (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE) == 0) {
             return nullptr;
         }
 
-        return self->presentElements;
+        return (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
     }
-    auto IMPList_last(const IMPList* self) -> const void* {
-        if (!self || self->presentElementCount == 0) {
+    auto IMPList_last(const IMPList* const self) -> const void* {
+        if (!self) {
             return nullptr;
         }
 
-        return self->presentElements + ((self->presentElementCount - 1) * self->elementSize);
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        if (presentElementCount == 0) {
+            return nullptr;
+        }
+
+        return (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE) + ((presentElementCount - 1) * self->elementSize);
     }
 
-    auto IMPList_add(IMPList* self, const void* inElement) -> bool {
+    auto IMPList_add(IMPList* const self, const void* inElement) -> bool {
+        using namespace foundation::primitive;
         if (!self || !inElement) {
             return false;
         }
 
-        auto* const bundle = ElementChunkBundleThreadLocalSet_getOrCreate(&self->chunkBundleThreadLocalSet);
-        if (!bundle) {
+        // 尝试获取线程本地的元素块包，否则就原地创建一个
+        auto* const currentBundle = ElementChunkBundleThreadLocalSet_getOrCreate(&self->chunkBundleThreadLocalSet);
+        if (!currentBundle) {
             return false;
         }
 
-        auto* currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_RELAXED);
-        usize currentElementCount = 0;
+        // 仅原子地获取当前块包中的当前块，同时创建当前块元素计数变量
+        auto* currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &currentBundle->currentChunk, MemoryOrder::RELAXED);
+        usize currentChunkElementCount = 0;
 
+        // 首先判断当前块存在情况
         if (currentChunk) {
-            const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_RELAXED) != 0;
-            currentElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_RELAXED);
+            // 仅原子地判断当前块有效状态
+            if (AtomicBool_load(&currentChunk->isValid, MemoryOrder::RELAXED)) {
+                // 当前块有效情况，以 Release 内存序原子地读取当前块元素计数
+                currentChunkElementCount = (usize) Atomic64_load(&currentChunk->elementCount, MemoryOrder::RELAXED);
 
-            if (!isChunkValid || currentElementCount >= self->chunkSize) {
-                if (isChunkValid) {
-                    foundation::primitive::Atomic_store(&currentChunk->isValid, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
+                // 当前块已满情况
+                if (currentChunkElementCount >= self->chunkSize) {
+                    // 以 Acquire-Release 内存序原子地交换当前块块有效状态为无效状态，并取回交换前的旧状态
+                    // 仅当旧状态为有效状态时，当前线程成为本次封装的唯一赢家，负责将当前块入队
+                    // 若旧状态已被他者抢先置为无效状态，他者已负责入队，则当前线程须跳过入队以避免重复入队
+                    if (AtomicBool_exchange(&currentChunk->isValid, false, MemoryOrder::ACQUIRE_RELEASE)) {
+                        // 将当前块指针入队（拷贝入队）当前块包的封装块队列
+                        foundation::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedChunks, &currentChunk);
+                    }
 
-                    ElementChunk* const chunkToSeal = currentChunk;
-                    foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &chunkToSeal);
+                    // 当前块指针已被拷贝入队（或已由他者入队），将当前块指针置空
+                    currentChunk = nullptr;
                 }
-
+            } else {
+                // 当前块无效情况，直接将当前块指针置空
                 currentChunk = nullptr;
             }
         }
 
+        // 当前块不存在情况（本来就不存在，又或者是被成功封装后被置空）
         if (!currentChunk) {
+            // 当前块不存在，原地构造新块
             currentChunk = ElementChunk_construct(self->elementSize, self->chunkSize);
             if (!currentChunk) {
                 return false;
             }
 
-            foundation::primitive::Atomic_store(&bundle->currentChunk, (u64) (addr) currentChunk, foundation::primitive::MEMORY_ORDER_RELEASE);
-            currentElementCount = 0;
+            // 将新构造的当前块以 Release 内存序原子地存储为当前块包的当前块
+            AtomicPtr_store((void**) &currentBundle->currentChunk, (void*) currentChunk, MemoryOrder::RELEASE);
+
+            // 新构造当前块，当前块元素计数为 0
+            currentChunkElementCount = 0;
         }
 
-        memcpy(currentChunk->elements + currentElementCount * self->elementSize, inElement, self->elementSize);
-        currentChunk->elementStates[currentElementCount] = ELEMENT_STATE_VALID;
+        // 内存拷贝存储新写入的元素值，此时是单线程操作，无需特殊内存序
+        // 同时仅原子地标记新写入的元素的状态为有效
+        memcpy(currentChunk->elements + currentChunkElementCount * self->elementSize, inElement, self->elementSize);
+        Atomic8_store((u8*) &currentChunk->elementStates[currentChunkElementCount], ElementState::VALID, MemoryOrder::RELAXED);
 
-        foundation::primitive::Atomic_store(&currentChunk->elementCount, currentElementCount + 1, foundation::primitive::MEMORY_ORDER_RELEASE);
+        // 以 Release 内存序原子地存储当前块元素计数为当前块的的元素计数
+        // 同时保证上面内存拷贝和状态标记写拥有一个共同的发布点
+        Atomic64_store(&currentChunk->elementCount, currentChunkElementCount + 1, MemoryOrder::RELEASE);
 
-        if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-            u64 expected = 0;
-            if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        // 首先仅原子地读合并等待标志，非合并等待状态才可进入
+        if (!AtomicBool_load(&self->isMergePending, MemoryOrder::RELAXED)) {
+            // 进行一次以 Acquire-Release 内存序原子的 CAS 操作，尝试将合并等待标志设为等待合并状态
+            // 若 CAS 成功则发送信号，触发唤醒维护线程；否则认为已经被他者 CAS 抢占，跳过该次 CAS
+            bool expected = false;
+            if (AtomicBool_compareExchange(&self->isMergePending, &expected, true, MemoryOrder::ACQUIRE_RELEASE)) {
                 foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
             }
         }
 
         return true;
     }
-    auto IMPList_addAll(IMPList* self, const void* inElements, const usize inElementCount) -> bool {
+    auto IMPList_addAll(IMPList* const self, const void* inElements, const usize inElementCount) -> bool {
+        using namespace foundation::primitive;
         if (!self || !inElements) {
             return false;
         }
@@ -835,59 +827,87 @@ namespace Catelier::src::architecture::imp {
             return true;
         }
 
-        auto* const bundle = ElementChunkBundleThreadLocalSet_getOrCreate(&self->chunkBundleThreadLocalSet);
-        if (!bundle) {
+        // 尝试获取线程本地的元素块包，否则就原地创建一个
+        auto* const currentBundle = ElementChunkBundleThreadLocalSet_getOrCreate(&self->chunkBundleThreadLocalSet);
+        if (!currentBundle) {
             return false;
         }
 
-        auto* currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_RELAXED);
-        usize currentElementCount = 0;
+        // 仅原子地获取当前块包中的当前块，同时创建当前块元素计数变量
+        auto* currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &currentBundle->currentChunk, MemoryOrder::RELAXED);
+        usize currentChunkElementCount = 0;
 
-        const u8* elementCursor = (const u8*) inElements;
+        // 创建批量写入元素游标与剩余元素计数变量
+        const auto* elementCursor = (const u8*) inElements;
         usize remainingElementCount = inElementCount;
 
+        // 循环批量写入，直到剩余元素全部写完
         while (remainingElementCount > 0) {
+            // 首先判断当前块存在情况
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_RELAXED) != 0;
-                currentElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_RELAXED);
+                // 仅原子地判断当前块有效状态
+                if (AtomicBool_load(&currentChunk->isValid, MemoryOrder::RELAXED)) {
+                    // 当前块有效情况，仅原子地读取当前块元素计数
+                    currentChunkElementCount = (usize) Atomic64_load(&currentChunk->elementCount, MemoryOrder::RELAXED);
 
-                if (!isChunkValid || currentElementCount >= self->chunkSize) {
-                    if (isChunkValid) {
-                        foundation::primitive::Atomic_store(&currentChunk->isValid, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
+                    // 当前块已满情况
+                    if (currentChunkElementCount >= self->chunkSize) {
+                        // 以 Acquire-Release 内存序原子地交换当前块块有效状态为无效状态，并取回交换前的旧状态
+                        // 仅当旧状态为有效状态时，当前线程成为本次封装的唯一赢家，负责将当前块入队
+                        // 若旧状态已被他者抢先置为无效状态，他者已负责入队，则当前线程须跳过入队以避免重复入队
+                        if (AtomicBool_exchange(&currentChunk->isValid, false, MemoryOrder::ACQUIRE_RELEASE)) {
+                            // 将当前块指针入队（拷贝入队）当前块包的封装块队列
+                            foundation::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedChunks, &currentChunk);
+                        }
 
-                        ElementChunk* const chunkToSeal = currentChunk;
-                        foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &chunkToSeal);
+                        // 当前块指针已被拷贝入队（或已由他者入队），将当前块指针置空
+                        currentChunk = nullptr;
                     }
-
+                } else {
+                    // 当前块无效情况，直接将当前块指针置空
                     currentChunk = nullptr;
                 }
             }
 
+            // 当前块不存在情况（本来就不存在，又或者是被成功封装后被置空）
             if (!currentChunk) {
+                // 当前块不存在，原地构造新块
                 currentChunk = ElementChunk_construct(self->elementSize, self->chunkSize);
                 if (!currentChunk) {
                     return false;
                 }
 
-                foundation::primitive::Atomic_store(&bundle->currentChunk, (u64) (addr) currentChunk, foundation::primitive::MEMORY_ORDER_RELEASE);
-                currentElementCount = 0;
+                // 将新构造的当前块以 Release 内存序原子地存储为当前块包的当前块
+                AtomicPtr_store((void**) &currentBundle->currentChunk, (void*) currentChunk, MemoryOrder::RELEASE);
+
+                // 新构造当前块，当前块元素计数为 0
+                currentChunkElementCount = 0;
             }
 
-            const usize availableSpace = self->chunkSize - currentElementCount;
-            const usize writeElementCount = remainingElementCount < availableSpace ? remainingElementCount : availableSpace;
+            // 计算当前块可用空间与本次批量写入的元素数
+            const usize currentChunkAvailableSpace = self->chunkSize - currentChunkElementCount;
+            const usize writeElementCount = remainingElementCount < currentChunkAvailableSpace ? remainingElementCount : currentChunkAvailableSpace;
 
-            memcpy(currentChunk->elements + currentElementCount * self->elementSize, elementCursor, writeElementCount * self->elementSize);
-            memset(currentChunk->elementStates + currentElementCount, ELEMENT_STATE_VALID, writeElementCount);
+            // 内存拷贝存储本次批量写入的元素值，此时是单线程操作，无需特殊内存序
+            // 同时批量标记本次批量写入的元素状态为有效
+            memcpy(currentChunk->elements + currentChunkElementCount * self->elementSize, elementCursor, writeElementCount * self->elementSize);
+            memset(currentChunk->elementStates + currentChunkElementCount, ElementState::VALID, writeElementCount);
 
-            foundation::primitive::Atomic_store(&currentChunk->elementCount, currentElementCount + writeElementCount, foundation::primitive::MEMORY_ORDER_RELEASE);
+            // 以 Release 内存序原子地存储当前块元素计数为当前块的元素计数
+            // 同时保证上面内存拷贝和状态标记写拥有一个共同的发布点
+            Atomic64_store(&currentChunk->elementCount, currentChunkElementCount + writeElementCount, MemoryOrder::RELEASE);
 
+            // 推进元素游标与剩余元素计数变量
             elementCursor += writeElementCount * self->elementSize;
             remainingElementCount -= writeElementCount;
         }
 
-        if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-            u64 expected = 0;
-            if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        // 首先仅原子地读合并等待标志，非合并等待状态才可进入
+        if (!AtomicBool_load(&self->isMergePending, MemoryOrder::RELAXED)) {
+            // 进行一次以 Acquire-Release 内存序原子的 CAS 操作，尝试将合并等待标志设为等待合并状态
+            // CAS 成功则发送信号，触发唤醒维护线程；否则认为已经被他者 CAS 抢占，则跳过该次 CAS
+            bool expected = false;
+            if (AtomicBool_compareExchange(&self->isMergePending, &expected, true, MemoryOrder::ACQUIRE_RELEASE)) {
                 foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
             }
         }
@@ -895,105 +915,101 @@ namespace Catelier::src::architecture::imp {
         return true;
     }
 
-    auto IMPList_remove(IMPList* self, const void* inElement) -> bool {
+    auto IMPList_remove(IMPList* const self, const void* const inElement) -> bool {
         if (!self || !inElement) {
             return false;
         }
 
-        bool changed = false;
+        bool removed = false;
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_ACQUIRE) != 0;
-                if (isChunkValid) {
-                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                if (foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                     for (usize i = 0; i < currentChunkElementCount; ++i) {
-                        if (currentChunk->elementStates[i] != ELEMENT_STATE_VALID) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &currentChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = currentChunk->elements + i * self->elementSize;
-                        const bool isMatch = self->elementEquals ? self->elementEquals(candidate, inElement) : (memcmp(candidate, inElement, self->elementSize) == 0);
-                        if (isMatch) {
-                            currentChunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                        const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
+                        if (self->elementEquals ? self->elementEquals(candidateElement, inElement) : (memcmp(candidateElement, inElement, self->elementSize) == 0)) {
+                            foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                             break;
                         }
                     }
                 }
             }
 
-            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
-            while (node) {
-                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
-                if (chunk) {
-                    const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
-                    for (usize i = 0; i < chunkElementCount; ++i) {
-                        if (chunk->elementStates[i] != ELEMENT_STATE_VALID) {
+            auto* sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (sealedChunkNode) {
+                auto* const sealedChunk = *((ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                if (sealedChunk) {
+                    const usize sealedChunkElementCount = (usize) foundation::primitive::Atomic64_load(&sealedChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < sealedChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &sealedChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = chunk->elements + i * self->elementSize;
-                        const bool isMatch = self->elementEquals ? self->elementEquals(candidate, inElement) : (memcmp(candidate, inElement, self->elementSize) == 0);
-                        if (isMatch) {
-                            chunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                        const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
+                        if (self->elementEquals ? self->elementEquals(candidateElement, inElement) : (memcmp(candidateElement, inElement, self->elementSize) == 0)) {
+                            foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                             break;
                         }
                     }
                 }
 
-                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+                sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueueNode_next(sealedChunkNode);
             }
         }
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        if (changed) {
-            if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-                u64 expected = 0;
-                if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        if (removed) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expected = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
         }
 
-        return changed;
+        return removed;
     }
-    auto IMPList_removeAll(IMPList* self, const void* inElements, const usize inElementCount) -> bool {
+    auto IMPList_removeAll(IMPList* const self, const void* const inElements, const usize inElementCount) -> bool {
         if (!self || !inElements || inElementCount == 0) {
             return false;
         }
 
-        bool changed = false;
+        bool removed = false;
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_ACQUIRE) != 0;
-                if (isChunkValid) {
-                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                if (foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                     for (usize i = 0; i < currentChunkElementCount; ++i) {
-                        if (currentChunk->elementStates[i] != ELEMENT_STATE_VALID) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &currentChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = currentChunk->elements + i * self->elementSize;
+                        const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
                         for (usize j = 0; j < inElementCount; ++j) {
                             const void* const target = ((const u8*) inElements) + j * self->elementSize;
-                            const bool isMatch = self->elementEquals ? self->elementEquals(candidate, target) : (memcmp(candidate, target, self->elementSize) == 0);
+                            const bool isMatch = self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0);
                             if (isMatch) {
-                                currentChunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                                changed = true;
+                                foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                                removed = true;
                                 break;
                             }
                         }
@@ -1001,318 +1017,319 @@ namespace Catelier::src::architecture::imp {
                 }
             }
 
-            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
-            while (node) {
-                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
-                if (chunk) {
-                    const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
-                    for (usize i = 0; i < chunkElementCount; ++i) {
-                        if (chunk->elementStates[i] != ELEMENT_STATE_VALID) {
+            auto* sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (sealedChunkNode) {
+                auto* const sealedChunk = *((ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                if (sealedChunk) {
+                    const usize sealedChunkElementCount = (usize) foundation::primitive::Atomic64_load(&sealedChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < sealedChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &sealedChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = chunk->elements + i * self->elementSize;
+                        const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
                         for (usize j = 0; j < inElementCount; ++j) {
                             const void* const target = ((const u8*) inElements) + j * self->elementSize;
-                            const bool isMatch = self->elementEquals ? self->elementEquals(candidate, target) : (memcmp(candidate, target, self->elementSize) == 0);
+                            const bool isMatch = self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0);
                             if (isMatch) {
-                                chunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                                changed = true;
+                                foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                                removed = true;
                                 break;
                             }
                         }
                     }
                 }
 
-                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+                sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueueNode_next(sealedChunkNode);
             }
         }
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        if (changed) {
-            if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-                u64 expected = 0;
-                if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        if (removed) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expected = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
         }
 
-        return changed;
+        return removed;
     }
-    auto IMPList_removeIf(IMPList* self, bool (*inPredicate)(const void*, void*), void* inPredicateContext) -> bool {
+    auto IMPList_removeIf(IMPList* const self, bool (*inPredicate)(const void*, void*), void* const inPredicateContext) -> bool {
         if (!self || !inPredicate) {
             return false;
         }
 
-        bool changed = false;
+        bool removed = false;
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_ACQUIRE) != 0;
-                if (isChunkValid) {
-                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                if (foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                     for (usize i = 0; i < currentChunkElementCount; ++i) {
-                        if (currentChunk->elementStates[i] != ELEMENT_STATE_VALID) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &currentChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = currentChunk->elements + i * self->elementSize;
-                        if (inPredicate(candidate, inPredicateContext)) {
-                            currentChunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                        const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
+                        if (inPredicate(candidateElement, inPredicateContext)) {
+                            foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                         }
                     }
                 }
             }
 
-            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
-            while (node) {
-                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
-                if (chunk) {
-                    const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
-                    for (usize i = 0; i < chunkElementCount; ++i) {
-                        if (chunk->elementStates[i] != ELEMENT_STATE_VALID) {
+            auto* sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (sealedChunkNode) {
+                auto* const sealedChunk = *((ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                if (sealedChunk) {
+                    const usize sealedChunkElementCount = (usize) foundation::primitive::Atomic64_load(&sealedChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < sealedChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &sealedChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = chunk->elements + i * self->elementSize;
-                        if (inPredicate(candidate, inPredicateContext)) {
-                            chunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                        const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
+                        if (inPredicate(candidateElement, inPredicateContext)) {
+                            foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                         }
                     }
                 }
 
-                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+                sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueueNode_next(sealedChunkNode);
             }
         }
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        if (changed) {
-            if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-                u64 expected = 0;
-                if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        if (removed) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expected = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
         }
 
-        return changed;
+        return removed;
     }
-    auto IMPList_retain(IMPList* self, const void* inElements, const usize inElementCount) -> bool {
+    auto IMPList_retain(IMPList* const self, const void* const inElements, const usize inElementCount) -> bool {
         if (!self || !inElements || inElementCount == 0) {
             return false;
         }
 
-        bool changed = false;
+        bool removed = false;
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_ACQUIRE) != 0;
-                if (isChunkValid) {
-                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                if (foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                     for (usize i = 0; i < currentChunkElementCount; ++i) {
-                        if (currentChunk->elementStates[i] != ELEMENT_STATE_VALID) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &currentChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = currentChunk->elements + i * self->elementSize;
+                        const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
 
                         bool isFound = false;
 
                         for (usize j = 0; j < inElementCount; ++j) {
                             const void* const target = ((const u8*) inElements) + j * self->elementSize;
-                            const bool isMatch = self->elementEquals ? self->elementEquals(candidate, target) : (memcmp(candidate, target, self->elementSize) == 0);
-                            if (isMatch) {
+                            if (self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0)) {
                                 isFound = true;
                                 break;
                             }
                         }
 
                         if (!isFound) {
-                            currentChunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                            foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                         }
                     }
                 }
             }
 
-            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
-            while (node) {
-                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
-                if (chunk) {
-                    const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
-                    for (usize i = 0; i < chunkElementCount; ++i) {
-                        if (chunk->elementStates[i] != ELEMENT_STATE_VALID) {
+            auto* sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (sealedChunkNode) {
+                auto* const sealedChunk = *((ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                if (sealedChunk) {
+                    const usize sealedChunkElementCount = (usize) foundation::primitive::Atomic64_load(&sealedChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < sealedChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &sealedChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = chunk->elements + i * self->elementSize;
+                        const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
 
                         bool isFound = false;
 
                         for (usize j = 0; j < inElementCount; ++j) {
                             const void* const target = (const u8*) inElements + j * self->elementSize;
-                            const bool isMatch = self->elementEquals ? self->elementEquals(candidate, target) : (memcmp(candidate, target, self->elementSize) == 0);
-                            if (isMatch) {
+                            if (self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0)) {
                                 isFound = true;
                                 break;
                             }
                         }
 
                         if (!isFound) {
-                            chunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                            foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                         }
                     }
                 }
 
-                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+                sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueueNode_next(sealedChunkNode);
             }
         }
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        if (changed) {
-            if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-                u64 expected = 0;
-                if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        if (removed) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expected = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
         }
 
-        return changed;
+        return removed;
     }
-    auto IMPList_retainIf(IMPList* self, bool (*inPredicate)(const void*, void*), void* inPredicateContext) -> bool {
+    auto IMPList_retainIf(IMPList* const self, bool (*inPredicate)(const void*, void*), void* const inPredicateContext) -> bool {
         if (!self || !inPredicate) {
             return false;
         }
 
-        bool changed = false;
+        bool removed = false;
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_ACQUIRE) != 0;
-                if (isChunkValid) {
-                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                if (foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                     for (usize i = 0; i < currentChunkElementCount; ++i) {
-                        if (currentChunk->elementStates[i] != ELEMENT_STATE_VALID) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &currentChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = currentChunk->elements + i * self->elementSize;
-                        if (!inPredicate(candidate, inPredicateContext)) {
-                            currentChunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                        const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
+                        if (!inPredicate(candidateElement, inPredicateContext)) {
+                            foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                         }
                     }
                 }
             }
 
-            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
-            while (node) {
-                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
-                if (chunk) {
-                    const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
-                    for (usize i = 0; i < chunkElementCount; ++i) {
-                        if (chunk->elementStates[i] != ELEMENT_STATE_VALID) {
+            auto* sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (sealedChunkNode) {
+                auto* const sealedChunk = *((ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                if (sealedChunk) {
+                    const usize sealedChunkElementCount = (usize) foundation::primitive::Atomic64_load(&sealedChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < sealedChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &sealedChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
                             continue;
                         }
 
-                        const void* const candidate = chunk->elements + i * self->elementSize;
-                        if (!inPredicate(candidate, inPredicateContext)) {
-                            chunk->elementStates[i] = ELEMENT_STATE_TOMBSTONE;
-                            changed = true;
+                        const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
+                        if (!inPredicate(candidateElement, inPredicateContext)) {
+                            foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                            removed = true;
                         }
                     }
                 }
 
-                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+                sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueueNode_next(sealedChunkNode);
             }
         }
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        if (changed) {
-            if (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) == 0) {
-                u64 expected = 0;
-                if (foundation::primitive::Atomic_compareExchange(&self->isMergePending, &expected, 1, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
+        if (removed) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expected = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
         }
 
-        return changed;
+        return removed;
     }
-    auto IMPList_clear(IMPList* self) -> bool {
+    auto IMPList_clear(IMPList* const self) -> bool {
         if (!self) {
             return false;
         }
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                u64 expected = (u64) (addr) currentChunk;
-                if (foundation::primitive::Atomic_compareExchange(&bundle->currentChunk, &expected, 0, foundation::primitive::MEMORY_ORDER_ACQ_REL)) {
-                    foundation::primitive::Atomic_store(&currentChunk->isValid, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
+                if (foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    const usize currentChunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < currentChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &currentChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
+                            continue;
+                        }
 
-                    ElementChunk* const chunkToSeal = currentChunk;
-                    foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &chunkToSeal);
+                        foundation::primitive::Atomic8_store((u8*) &currentChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                    }
                 }
             }
 
-            auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
-            while (node) {
-                auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
-                if (chunk) {
-                    foundation::primitive::Atomic_store(&chunk->elementCount, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
+            auto* sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (sealedChunkNode) {
+                auto* const sealedChunk = *((ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                if (sealedChunk) {
+                    const usize sealedChunkElementCount = (usize) foundation::primitive::Atomic64_load(&sealedChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+                    for (usize i = 0; i < sealedChunkElementCount; ++i) {
+                        if (foundation::primitive::Atomic8_load((const u8*) &sealedChunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) != ElementState::VALID) {
+                            continue;
+                        }
+
+                        foundation::primitive::Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementState::TOMBSTONE, foundation::primitive::MemoryOrder::RELAXED);
+                    }
                 }
 
-                node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+                sealedChunkNode = foundation::concurrent::ConcurrentUnboundedQueueNode_next(sealedChunkNode);
             }
         }
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
-
-        IMPList_retirePresentElements(self);
-        self->presentElements = nullptr;
-        self->presentElementCount = 0;
 
         IMPList_merge(self);
 
         return true;
     }
 
-    auto IMPList_find(const IMPList* self, const void* inElement) -> const void* {
+    auto IMPList_find(const IMPList* const self, const void* const inElement) -> const void* {
         if (!self || !inElement) {
             return nullptr;
         }
 
-        const u8* const presentElements = self->presentElements;
-        const usize presentElementCount = self->presentElementCount;
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
 
         if (!presentElements || presentElementCount == 0) {
             return nullptr;
@@ -1331,13 +1348,13 @@ namespace Catelier::src::architecture::imp {
 
         return nullptr;
     }
-    auto IMPList_contains(const IMPList* self, const void* inElement) -> bool {
+    auto IMPList_contains(const IMPList* const self, const void* const inElement) -> bool {
         if (!self || !inElement) {
             return false;
         }
 
-        const u8* const presentElements = self->presentElements;
-        const usize presentElementCount = self->presentElementCount;
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
 
         if (!presentElements || presentElementCount == 0) {
             return false;
@@ -1356,7 +1373,7 @@ namespace Catelier::src::architecture::imp {
 
         return false;
     }
-    auto IMPList_containsAll(const IMPList* self, const void* inElements, const usize inElementCount) -> bool {
+    auto IMPList_containsAll(const IMPList* const self, const void* const inElements, const usize inElementCount) -> bool {
         if (!self) {
             return false;
         }
@@ -1369,8 +1386,8 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
-        const u8* const presentElements = self->presentElements;
-        const usize presentElementCount = self->presentElementCount;
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
 
         if (!presentElements || presentElementCount == 0) {
             return false;
@@ -1401,13 +1418,13 @@ namespace Catelier::src::architecture::imp {
 
         return true;
     }
-    auto IMPList_firstIndexOf(const IMPList* self, const void* inElement) -> ssize {
+    auto IMPList_firstIndexOf(const IMPList* const self, const void* const inElement) -> ssize {
         if (!self || !inElement) {
             return -1;
         }
 
-        const u8* const presentElements = self->presentElements;
-        const usize presentElementCount = self->presentElementCount;
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
 
         if (!presentElements || presentElementCount == 0) {
             return -1;
@@ -1426,13 +1443,13 @@ namespace Catelier::src::architecture::imp {
 
         return -1;
     }
-    auto IMPList_lastIndexOf(const IMPList* self, const void* inElement) -> ssize {
+    auto IMPList_lastIndexOf(const IMPList* const self, const void* const inElement) -> ssize {
         if (!self || !inElement) {
             return -1;
         }
 
-        const u8* const presentElements = self->presentElements;
-        const usize presentElementCount = self->presentElementCount;
+        const usize presentElementCount = (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE);
+        const u8* const presentElements = (const u8*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElements, foundation::primitive::MemoryOrder::ACQUIRE);
 
         if (!presentElements || presentElementCount == 0) {
             return -1;
@@ -1452,22 +1469,22 @@ namespace Catelier::src::architecture::imp {
 
         return -1;
     }
-    auto IMPList_isEmpty(const IMPList* self) -> bool {
+    auto IMPList_isEmpty(const IMPList* const self) -> bool {
         if (!self) {
             return true;
         }
 
-        return self->presentElementCount == 0;
+        return (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE) == 0;
     }
-    auto IMPList_isNotEmpty(const IMPList* self) -> bool {
+    auto IMPList_isNotEmpty(const IMPList* const self) -> bool {
         if (!self) {
             return false;
         }
 
-        return self->presentElementCount != 0;
+        return (usize) foundation::primitive::Atomic64_load(&self->presentElementCount, foundation::primitive::MemoryOrder::ACQUIRE) != 0;
     }
 
-    auto IMPList_sort(IMPList* self, const IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)) -> bool {
+    auto IMPList_sort(IMPList* const self, const IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)) -> bool {
         if (!self) {
             return false;
         }
@@ -1478,7 +1495,7 @@ namespace Catelier::src::architecture::imp {
         return IMPList_merge(self);
     }
 
-    auto IMPList_merge(IMPList* self) -> bool {
+    auto IMPList_merge(IMPList* const self) -> bool {
         if (!self) {
             return false;
         }
@@ -1500,14 +1517,14 @@ namespace Catelier::src::architecture::imp {
 
         foundation::primitive::Mutex_lock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        for (auto* entry = self->chunkBundleThreadLocalSet.head; entry; entry = entry->nextInOwner) {
+        for (auto* entry = self->chunkBundleThreadLocalSet.headEntry; entry; entry = entry->nextEntryInOwner) {
             auto* const bundle = entry->bundle;
 
             auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
             while (node) {
                 auto* const chunk = *(ElementChunk**) foundation::concurrent::ConcurrentUnboundedQueueNode_data(node);
                 if (chunk) {
-                    const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&chunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                    const usize chunkElementCount = (usize) foundation::primitive::Atomic64_load(&chunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                     if (chunkElementCount > 0) {
                         if (sourceCount >= sourceCapacity) {
                             const usize newCapacity = sourceCapacity * 2;
@@ -1544,10 +1561,10 @@ namespace Catelier::src::architecture::imp {
                 node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
             }
 
-            auto* const currentChunk = (ElementChunk*) (addr) foundation::primitive::Atomic_load(&bundle->currentChunk, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
             if (currentChunk) {
-                const bool isChunkValid = foundation::primitive::Atomic_load(&currentChunk->isValid, foundation::primitive::MEMORY_ORDER_ACQUIRE) != 0;
-                const usize chunkElementCount = (usize) foundation::primitive::Atomic_load(&currentChunk->elementCount, foundation::primitive::MEMORY_ORDER_ACQUIRE);
+                const bool isChunkValid = foundation::primitive::AtomicBool_load(&currentChunk->isValid, foundation::primitive::MemoryOrder::ACQUIRE);
+                const usize chunkElementCount = (usize) foundation::primitive::Atomic64_load(&currentChunk->elementCount, foundation::primitive::MemoryOrder::ACQUIRE);
                 if (isChunkValid && chunkElementCount > 0) {
                     if (sourceCount >= sourceCapacity) {
                         const usize newCapacity = sourceCapacity * 2;
@@ -1584,111 +1601,93 @@ namespace Catelier::src::architecture::imp {
 
         foundation::primitive::Mutex_unlock(&ElementChunkBundleThreadLocalSet_entryRegistryMutex);
 
-        if (totalElementCount == 0) {
-            free(sourceChunks);
-            free(sourceElementCounts);
+        u8* newPresentElements = nullptr;
+        usize newPresentElementCount = 0;
 
-            foundation::primitive::Atomic_fetchAdd(&self->mergeCount, 1, foundation::primitive::MEMORY_ORDER_RELAXED);
-            foundation::primitive::Atomic_store(&self->lastMergeDurationMs, foundation::primitive::Time_currentMs() - mergeStartTimeMs, foundation::primitive::MEMORY_ORDER_RELAXED);
-
-            const usize ingestSizeAfter = IMPList_ingestElementCount(self);
-            if (ingestSizeAfter == ingestSizeBefore) {
-                foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
-                foundation::primitive::Atomic_store(&self->isMergePending, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
-                foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
-                foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
+        if (totalElementCount > 0) {
+            newPresentElements = (u8*) malloc(self->elementSize * totalElementCount);
+            if (!newPresentElements) {
+                free(sourceChunks);
+                free(sourceElementCounts);
+                return false;
             }
 
-            return true;
-        }
-
-        auto* newPresentElements = (u8*) malloc(self->elementSize * totalElementCount);
-        if (!newPresentElements) {
-            free(sourceChunks);
-            free(sourceElementCounts);
-            return false;
-        }
-
-        usize writeIndex = 0;
-        for (usize s = 0; s < sourceCount; ++s) {
-            const auto* const chunk = sourceChunks[s];
-            const usize elementCount = sourceElementCounts[s];
-            for (usize i = 0; i < elementCount; ++i) {
-                if (chunk->elementStates[i] == ELEMENT_STATE_VALID) {
-                    memcpy(newPresentElements + writeIndex * self->elementSize, chunk->elements + i * self->elementSize, self->elementSize);
-                    writeIndex++;
+            usize writeIndex = 0;
+            for (usize s = 0; s < sourceCount; ++s) {
+                const auto* const chunk = sourceChunks[s];
+                const usize elementCount = sourceElementCounts[s];
+                for (usize i = 0; i < elementCount; ++i) {
+                    if (foundation::primitive::Atomic8_load((const u8*) &chunk->elementStates[i], foundation::primitive::MemoryOrder::RELAXED) == ElementState::VALID) {
+                        memcpy(newPresentElements + writeIndex * self->elementSize, chunk->elements + i * self->elementSize, self->elementSize);
+                        writeIndex++;
+                    }
                 }
+            }
+
+            if (writeIndex == 0) {
+                free(newPresentElements);
+                newPresentElements = nullptr;
+            } else {
+                if (writeIndex < totalElementCount) {
+                    const usize shrunkByteSize = writeIndex * self->elementSize;
+                    auto* const shrunk = (u8*) realloc(newPresentElements, shrunkByteSize);
+                    if (shrunk) {
+                        newPresentElements = shrunk;
+                    }
+                }
+
+                if (self->elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && self->elementSortingComparator) {
+                    qsort(newPresentElements, writeIndex, self->elementSize, self->elementSortingComparator);
+                    if (self->elementSortingStrategy == IMPList_ElementSortingStrategy::DESCENDING) {
+                        for (usize pairIndex = 0; pairIndex < writeIndex / 2; ++pairIndex) {
+                            u8* const leftElement = newPresentElements + pairIndex * self->elementSize;
+                            u8* const rightElement = newPresentElements + (writeIndex - 1 - pairIndex) * self->elementSize;
+                            for (usize byteIndex = 0; byteIndex < self->elementSize; ++byteIndex) {
+                                const u8 tempByte = leftElement[byteIndex];
+                                leftElement[byteIndex] = rightElement[byteIndex];
+                                rightElement[byteIndex] = tempByte;
+                            }
+                        }
+                    }
+                }
+
+                newPresentElementCount = writeIndex;
             }
         }
 
         free(sourceChunks);
         free(sourceElementCounts);
 
-        if (writeIndex == 0) {
-            free(newPresentElements);
-
-            foundation::primitive::Atomic_fetchAdd(&self->mergeCount, 1, foundation::primitive::MEMORY_ORDER_RELAXED);
-            foundation::primitive::Atomic_store(&self->lastMergeDurationMs, foundation::primitive::Time_currentMs() - mergeStartTimeMs, foundation::primitive::MEMORY_ORDER_RELAXED);
-
-            const usize ingestSizeAfter = IMPList_ingestElementCount(self);
-            if (ingestSizeAfter == ingestSizeBefore) {
-                foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
-                foundation::primitive::Atomic_store(&self->isMergePending, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
-                foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
-                foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
-            }
-
-            return true;
-        }
-
-        if (writeIndex < totalElementCount) {
-            const usize shrunkByteSize = writeIndex * self->elementSize;
-            auto* const shrunk = (u8*) realloc(newPresentElements, shrunkByteSize);
-            if (shrunk) {
-                newPresentElements = shrunk;
-            }
-        }
-
-        if (self->elementSortingStrategy != UNORDERED && self->elementSortingComparator) {
-            qsort(newPresentElements, writeIndex, self->elementSize, self->elementSortingComparator);
-            if (self->elementSortingStrategy == DESCENDING) {
-                for (usize pairIndex = 0; pairIndex < writeIndex / 2; ++pairIndex) {
-                    u8* const leftElement = newPresentElements + pairIndex * self->elementSize;
-                    u8* const rightElement = newPresentElements + (writeIndex - 1 - pairIndex) * self->elementSize;
-                    for (usize byteIndex = 0; byteIndex < self->elementSize; ++byteIndex) {
-                        const u8 tempByte = leftElement[byteIndex];
-                        leftElement[byteIndex] = rightElement[byteIndex];
-                        rightElement[byteIndex] = tempByte;
-                    }
-                }
-            }
-        }
+        foundation::primitive::Mutex_lock(&self->mergeMutex);
 
         IMPList_retirePresentElements(self);
-        self->presentElements = newPresentElements;
-        self->presentElementCount = writeIndex;
 
-        foundation::primitive::Atomic_fetchAdd(&self->mergeCount, 1, foundation::primitive::MEMORY_ORDER_RELAXED);
-        foundation::primitive::Atomic_store(&self->lastMergeDurationMs, foundation::primitive::Time_currentMs() - mergeStartTimeMs, foundation::primitive::MEMORY_ORDER_RELAXED);
+        foundation::primitive::AtomicPtr_store((void**) &self->presentElements, (void*) newPresentElements, foundation::primitive::MemoryOrder::RELEASE);
+        foundation::primitive::Atomic64_store(&self->presentElementCount, newPresentElementCount, foundation::primitive::MemoryOrder::RELEASE);
+
+        foundation::primitive::Mutex_unlock(&self->mergeMutex);
+
+        foundation::primitive::Atomic64_fetchAdd(&self->mergeCount, 1, foundation::primitive::MemoryOrder::RELAXED);
+        foundation::primitive::Atomic64_store(&self->lastMergeDurationMs, foundation::primitive::Time_currentMs() - mergeStartTimeMs, foundation::primitive::MemoryOrder::RELAXED);
 
         const usize ingestSizeAfter = IMPList_ingestElementCount(self);
         if (ingestSizeAfter == ingestSizeBefore) {
             foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
-            foundation::primitive::Atomic_store(&self->isMergePending, 0, foundation::primitive::MEMORY_ORDER_RELEASE);
+            foundation::primitive::AtomicBool_store(&self->isMergePending, false, foundation::primitive::MemoryOrder::RELEASE);
             foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
             foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
         }
 
         return true;
     }
-    auto IMPList_awaitMerging(IMPList* self) -> bool {
+    auto IMPList_awaitMerging(IMPList* const self) -> bool {
         if (!self) {
             return false;
         }
 
         foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
 
-        while (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) != 0) {
+        while (foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
             foundation::sync::ConditionalVar_wait(&self->awaitMergingCondition, &self->awaitMergingMutex);
         }
 
@@ -1696,7 +1695,7 @@ namespace Catelier::src::architecture::imp {
 
         return true;
     }
-    auto IMPList_timedAwaitMerging(IMPList* self, const u64 inTimeoutMs) -> bool {
+    auto IMPList_timedAwaitMerging(IMPList* const self, const u64 inTimeoutMs) -> bool {
         if (!self) {
             return false;
         }
@@ -1705,7 +1704,7 @@ namespace Catelier::src::architecture::imp {
 
         bool result = true;
 
-        while (foundation::primitive::Atomic_load(&self->isMergePending, foundation::primitive::MEMORY_ORDER_RELAXED) != 0) {
+        while (foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
             if (inTimeoutMs == 0 || !foundation::sync::ConditionalVar_timedWait(&self->awaitMergingCondition, &self->awaitMergingMutex, inTimeoutMs)) {
                 result = false;
                 break;

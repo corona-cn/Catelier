@@ -1,4 +1,6 @@
 #pragma once
+#include <cassert>
+
 #include "../../../../src/catelier/architecture/imp/IMPList.hpp"
 
 namespace Catelier::architecture::imp {
@@ -40,7 +42,7 @@ namespace Catelier::architecture::imp {
             };
 
             explicit IMPList(const usize inChunkSize = 1024, const u64 inPropagationDurationMs = 1, bool (*inElementEquals)(const void*, const void*) = nullptr) {
-                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inChunkSize, inPropagationDurationMs, src::architecture::imp::UNORDERED, nullptr, inElementEquals);
+                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inChunkSize, inPropagationDurationMs, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr, inElementEquals);
             }
             ~IMPList() {
                 if (this->handle) {
@@ -90,14 +92,38 @@ namespace Catelier::architecture::imp {
                 return *this;
             }
 
+            auto isValid() const -> bool {
+                return this->handle != nullptr;
+            }
+
             auto presentElements() const -> const ElementType* {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return nullptr;
                 }
 
                 return (const ElementType*) src::architecture::imp::IMPList_presentElements(this->handle);
             }
+            auto presentElementsSpan(const ElementType*& outElements, usize& outElementCount) const -> bool {
+                assert(this->handle != nullptr);
+                if (!this->handle) {
+                    return false;
+                }
+
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
+                    return false;
+                }
+
+                outElements = (const ElementType*) rawElements;
+                outElementCount = rawElementCount;
+
+                return true;
+            }
             auto presentElementsCopy(ElementType*& outElements, usize& outElementCount) const -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -115,6 +141,7 @@ namespace Catelier::architecture::imp {
                 return true;
             }
             auto presentElementCount() const -> usize {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return 0;
                 }
@@ -122,6 +149,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_presentElementCount(this->handle);
             }
             auto ingestElementCount() const -> usize {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return 0;
                 }
@@ -129,6 +157,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_ingestElementCount(this->handle);
             }
             auto mergeElementCount() const -> usize {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return 0;
                 }
@@ -137,6 +166,7 @@ namespace Catelier::architecture::imp {
             }
 
             auto get(const usize index) const -> const ElementType* {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return nullptr;
                 }
@@ -147,6 +177,7 @@ namespace Catelier::architecture::imp {
                 return this->get(index);
             }
             auto first() const -> const ElementType* {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return nullptr;
                 }
@@ -154,6 +185,7 @@ namespace Catelier::architecture::imp {
                 return (const ElementType*) src::architecture::imp::IMPList_first(this->handle);
             }
             auto last() const -> const ElementType* {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return nullptr;
                 }
@@ -162,6 +194,7 @@ namespace Catelier::architecture::imp {
             }
 
             auto add(const ElementType& inElement) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -174,6 +207,7 @@ namespace Catelier::architecture::imp {
                 return *this;
             }
             auto addAll(const ElementType* inElements, const usize inElementCount) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -182,6 +216,7 @@ namespace Catelier::architecture::imp {
             }
 
             auto remove(const ElementType& inElement) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -189,6 +224,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_remove(this->handle, &inElement);
             }
             auto removeAll(const ElementType* inElements, const usize inElementCount) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -197,6 +233,7 @@ namespace Catelier::architecture::imp {
             }
             template<typename Predicate>
             auto removeIf(Predicate inPredicate) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -204,6 +241,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_removeIf(this->handle, predicateBridge<Predicate>, &inPredicate);
             }
             auto retain(const ElementType* inElements, const usize inElementCount) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -212,6 +250,7 @@ namespace Catelier::architecture::imp {
             }
             template<typename Predicate>
             auto retainIf(Predicate inPredicate) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -219,6 +258,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_retainIf(this->handle, predicateBridge<Predicate>, &inPredicate);
             }
             auto clear() -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -227,42 +267,75 @@ namespace Catelier::architecture::imp {
             }
 
             auto begin() const -> ConstIterator {
-                return ConstIterator(this->presentElements());
-            }
-            auto end() const -> ConstIterator {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return ConstIterator(nullptr);
                 }
 
-                return ConstIterator(this->presentElements() + this->presentElementCount());
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
+                    return ConstIterator(nullptr);
+                }
+
+                this->presentElementsBegin = (const ElementType*) rawElements;
+                this->presentElementsEnd = this->presentElementsBegin + rawElementCount;
+
+                return ConstIterator(this->presentElementsBegin);
+            }
+            auto end() const -> ConstIterator {
+                assert(this->handle != nullptr);
+                if (!this->handle) {
+                    return ConstIterator(nullptr);
+                }
+
+                return ConstIterator(this->presentElementsEnd);
             }
 
             template<typename Function>
             auto forEach(Function function) const -> void {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return;
                 }
 
-                const auto* const presentElements = (const ElementType*) src::architecture::imp::IMPList_presentElements(this->handle);
-                const usize presentElementCount = src::architecture::imp::IMPList_presentElementCount(this->handle);
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
+                    return;
+                }
+
+                const auto* const presentElements = (const ElementType*) rawElements;
+                const usize presentElementCount = rawElementCount;
                 for (usize i = 0; i < presentElementCount; ++i) {
                     function(presentElements[i]);
                 }
             }
             template<typename Function>
             auto forEachIndexed(Function function) const -> void {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return;
                 }
 
-                const auto* const presentElements = (const ElementType*) src::architecture::imp::IMPList_presentElements(this->handle);
-                const usize presentElementCount = src::architecture::imp::IMPList_presentElementCount(this->handle);
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
+                    return;
+                }
+
+                const auto* const presentElements = (const ElementType*) rawElements;
+                const usize presentElementCount = rawElementCount;
                 for (usize i = 0; i < presentElementCount; ++i) {
                     function(i, presentElements[i]);
                 }
             }
 
             auto find(const ElementType& inElement) const -> const ElementType* {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return nullptr;
                 }
@@ -270,6 +343,7 @@ namespace Catelier::architecture::imp {
                 return (const ElementType*) src::architecture::imp::IMPList_find(this->handle, &inElement);
             }
             auto contains(const ElementType& inElement) const -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -277,6 +351,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_contains(this->handle, &inElement);
             }
             auto containsAll(const ElementType* inElements, const usize inElementCount) const -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -284,6 +359,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_containsAll(this->handle, inElements, inElementCount);
             }
             auto firstIndexOf(const ElementType& inElement) const -> ssize {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return -1;
                 }
@@ -291,6 +367,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_firstIndexOf(this->handle, &inElement);
             }
             auto lastIndexOf(const ElementType& inElement) const -> ssize {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return -1;
                 }
@@ -298,6 +375,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_lastIndexOf(this->handle, &inElement);
             }
             auto isEmpty() const -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return true;
                 }
@@ -305,6 +383,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_isEmpty(this->handle);
             }
             auto isNotEmpty() const -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -314,28 +393,35 @@ namespace Catelier::architecture::imp {
 
             template<typename Comparer>
             auto sortWith(Comparer inComparer) -> bool {
+                assert(this->handle != nullptr);
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::ASCENDING, comparerBridge<Comparer>);
             }
             template<typename Comparer>
             auto sortWithDescending(Comparer inComparer) -> bool {
+                assert(this->handle != nullptr);
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::DESCENDING, comparerBridge<Comparer>);
             }
             template<typename Selector>
             auto sortBy(Selector inSelector) -> bool {
+                assert(this->handle != nullptr);
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::ASCENDING, selectorBridge<Selector>);
             }
             template<typename Selector>
             auto sortByDescending(Selector inSelector) -> bool {
+                assert(this->handle != nullptr);
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::DESCENDING, selectorBridge<Selector>);
             }
             auto naturalSort() -> bool {
+                assert(this->handle != nullptr);
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::ASCENDING, naturalBridge);
             }
             auto naturalSortDescending() -> bool {
+                assert(this->handle != nullptr);
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::DESCENDING, naturalBridge);
             }
 
             auto merge() -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -343,6 +429,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_merge(this->handle);
             }
             auto awaitMerging() -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -350,6 +437,7 @@ namespace Catelier::architecture::imp {
                 return src::architecture::imp::IMPList_awaitMerging(this->handle);
             }
             auto awaitMerging(const u64 inTimeoutMs) -> bool {
+                assert(this->handle != nullptr);
                 if (!this->handle) {
                     return false;
                 }
@@ -359,6 +447,9 @@ namespace Catelier::architecture::imp {
 
         private:
             src::architecture::imp::IMPList* handle = nullptr;
+
+            mutable const ElementType* presentElementsBegin = nullptr;
+            mutable const ElementType* presentElementsEnd = nullptr;
 
             template<typename Predicate>
             static auto predicateBridge(const void* inElement, void* inPredicateContext) -> bool {

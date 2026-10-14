@@ -4,9 +4,13 @@
 #include "../../foundation/primitive/Mutex.hpp"
 
 #ifdef _WIN32
+
 #include <windows.h>
+
 #else
+
 #include <pthread.h>
+
 #endif
 
 namespace Catelier::src::foundation::concurrency {

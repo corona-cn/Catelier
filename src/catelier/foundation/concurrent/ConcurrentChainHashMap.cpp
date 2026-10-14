@@ -18,20 +18,20 @@ namespace Catelier::src::foundation::concurrent {
     typedef struct ConcurrentChainHashMapNode {
         void* key;
         void* value;
-        primitive::Atomic nextNode;
+        ConcurrentChainHashMapNode* nextNode;
     } ConcurrentChainHashMapNode;
 
     typedef struct ConcurrentChainHashMapBucketArray {
-        primitive::Atomic* buckets;
+        ConcurrentChainHashMapNode** buckets;
         usize bucketCount;
     } ConcurrentChainHashMapBucketArray;
 
     typedef struct ConcurrentChainHashMapSegment {
         primitive::Mutex mutex;
-        primitive::Atomic bucketArray;
+        ConcurrentChainHashMapBucketArray* bucketArray;
         ConcurrentChainHashMapBucketArray* history[HISTORY_SIZE];
         usize historyCount;
-        primitive::Atomic size;
+        u64 size;
     } ConcurrentChainHashMapSegment;
 
     typedef struct ConcurrentChainHashMap {
@@ -114,13 +114,11 @@ namespace Catelier::src::foundation::concurrent {
             if (!primitive::Mutex_init(&segment->mutex)) {
                 for (usize j = 0; j < i; ++j) {
                     auto* const prevSegment = &self->segments[j];
-                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&prevSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &prevSegment->bucketArray, primitive::RELAXED);
 
                     free(prevBucketArray->buckets);
                     free(prevBucketArray);
 
-                    primitive::Atomic_destroy(&prevSegment->bucketArray);
-                    primitive::Atomic_destroy(&prevSegment->size);
                     primitive::Mutex_destroy(&prevSegment->mutex);
                 }
 
@@ -130,43 +128,20 @@ namespace Catelier::src::foundation::concurrent {
                 return nullptr;
             }
 
-            // 初始化段内原子计数器
-            if (!primitive::Atomic_init(&segment->size, 0)) {
-                primitive::Mutex_destroy(&segment->mutex);
-
-                for (usize j = 0; j < i; ++j) {
-                    auto* const prevSegment = &self->segments[j];
-                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&prevSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
-
-                    free(prevBucketArray->buckets);
-                    free(prevBucketArray);
-
-                    primitive::Atomic_destroy(&prevSegment->bucketArray);
-                    primitive::Atomic_destroy(&prevSegment->size);
-                    primitive::Mutex_destroy(&prevSegment->mutex);
-                }
-
-                free(self->segments);
-                free(self);
-
-                return nullptr;
-            }
+            segment->size = 0;
 
             // 分配桶数组结构体
             auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) malloc(sizeof(ConcurrentChainHashMapBucketArray));
             if (!bucketArray) {
-                primitive::Atomic_destroy(&segment->size);
                 primitive::Mutex_destroy(&segment->mutex);
 
                 for (usize j = 0; j < i; ++j) {
                     auto* const prevSegment = &self->segments[j];
-                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&prevSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &prevSegment->bucketArray, primitive::RELAXED);
 
                     free(prevBucketArray->buckets);
                     free(prevBucketArray);
 
-                    primitive::Atomic_destroy(&prevSegment->bucketArray);
-                    primitive::Atomic_destroy(&prevSegment->size);
                     primitive::Mutex_destroy(&prevSegment->mutex);
                 }
 
@@ -177,22 +152,19 @@ namespace Catelier::src::foundation::concurrent {
             }
 
             // 分配桶数组本体
-            bucketArray->buckets = (primitive::Atomic*) calloc(effectiveInitialBucketCount, sizeof(primitive::Atomic));
+            bucketArray->buckets = (ConcurrentChainHashMapNode**) calloc(effectiveInitialBucketCount, sizeof(ConcurrentChainHashMapNode*));
             if (!bucketArray->buckets) {
                 free(bucketArray);
 
-                primitive::Atomic_destroy(&segment->size);
                 primitive::Mutex_destroy(&segment->mutex);
 
                 for (usize j = 0; j < i; ++j) {
                     auto* const prevSegment = &self->segments[j];
-                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&prevSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &prevSegment->bucketArray, primitive::RELAXED);
 
                     free(prevBucketArray->buckets);
                     free(prevBucketArray);
 
-                    primitive::Atomic_destroy(&prevSegment->bucketArray);
-                    primitive::Atomic_destroy(&prevSegment->size);
                     primitive::Mutex_destroy(&prevSegment->mutex);
                 }
 
@@ -205,30 +177,7 @@ namespace Catelier::src::foundation::concurrent {
             bucketArray->bucketCount = effectiveInitialBucketCount;
 
             // 把桶数组发布到段上，后续所有读写都通过这个原子指针
-            if (!primitive::Atomic_init(&segment->bucketArray, (u64) (addr) bucketArray)) {
-                free(bucketArray->buckets);
-                free(bucketArray);
-
-                primitive::Atomic_destroy(&segment->size);
-                primitive::Mutex_destroy(&segment->mutex);
-
-                for (usize j = 0; j < i; ++j) {
-                    auto* const prevSegment = &self->segments[j];
-                    auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&prevSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
-
-                    free(prevBucketArray->buckets);
-                    free(prevBucketArray);
-
-                    primitive::Atomic_destroy(&prevSegment->bucketArray);
-                    primitive::Atomic_destroy(&prevSegment->size);
-                    primitive::Mutex_destroy(&prevSegment->mutex);
-                }
-
-                free(self->segments);
-                free(self);
-
-                return nullptr;
-            }
+            segment->bucketArray = bucketArray;
         }
 
         self->valid = true;
@@ -242,22 +191,30 @@ namespace Catelier::src::foundation::concurrent {
 
         self->valid = false;
 
-        for (usize i = 0; i < self->segmentCount; ++i) {
-            auto* const segment = &self->segments[i];
+        auto* const segments = self->segments;
+        const usize segmentCount = self->segmentCount;
 
-            auto* const currentArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+        self->segments = nullptr;
+        self->segmentCount = 0;
+
+        for (usize i = 0; i < segmentCount; ++i) {
+            auto* const segment = &segments[i];
+
+            auto* const currentArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
             for (usize j = 0; j < currentArray->bucketCount; ++j) {
-                auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&currentArray->buckets[j], primitive::MEMORY_ORDER_RELAXED);
+                auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &currentArray->buckets[j], primitive::RELAXED);
                 while (node) {
-                    auto* const nextNode = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+                    auto* const nextNode = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
 
                     if (node->key) {
                         free(node->key);
                     }
+
                     if (node->value) {
                         free(node->value);
                     }
+
                     free(node);
 
                     node = nextNode;
@@ -272,12 +229,10 @@ namespace Catelier::src::foundation::concurrent {
                 free(segment->history[h]);
             }
 
-            primitive::Atomic_destroy(&segment->bucketArray);
-            primitive::Atomic_destroy(&segment->size);
             primitive::Mutex_destroy(&segment->mutex);
         }
 
-        free(self->segments);
+        free(segments);
         free(self);
 
         return true;
@@ -288,7 +243,7 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        const auto* const firstArray = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&self->segments[0].bucketArray, primitive::MEMORY_ORDER_RELAXED);
+        const auto* const firstArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &self->segments[0].bucketArray, primitive::RELAXED);
         auto* const newSelf = ConcurrentChainHashMap_construct(self->segmentCount, firstArray->bucketCount, 0, self->keySize, self->valueSize, self->hash, self->keyEquals);
         if (!newSelf) {
             return nullptr;
@@ -300,11 +255,11 @@ namespace Catelier::src::foundation::concurrent {
 
             primitive::Mutex_lock(&srcSegment->mutex);
 
-            const auto* const srcArray = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&srcSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
-            auto* const dstArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&dstSegment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+            const auto* const srcArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &srcSegment->bucketArray, primitive::RELAXED);
+            auto* const dstArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &dstSegment->bucketArray, primitive::RELAXED);
 
             for (usize j = 0; j < srcArray->bucketCount; ++j) {
-                const auto* node = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&srcArray->buckets[j], primitive::MEMORY_ORDER_RELAXED);
+                const auto* node = (const ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &srcArray->buckets[j], primitive::RELAXED);
                 while (node) {
                     if (node->value) {
                         const u64 nodeHash = self->hash(node->key);
@@ -336,13 +291,13 @@ namespace Catelier::src::foundation::concurrent {
                         }
                         memcpy(newNode->value, node->value, self->valueSize);
 
-                        const auto oldHead = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&dstArray->buckets[dstIndex], primitive::MEMORY_ORDER_RELAXED);
-                        primitive::Atomic_init(&newNode->nextNode, (u64) (addr) oldHead);
-                        primitive::Atomic_store(&dstArray->buckets[dstIndex], (u64) (addr) newNode, primitive::MEMORY_ORDER_RELEASE);
+                        auto* const oldHead = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &dstArray->buckets[dstIndex], primitive::RELAXED);
+                        newNode->nextNode = oldHead;
+                        primitive::AtomicPtr_store((void**) &dstArray->buckets[dstIndex], (void*) newNode, primitive::RELEASE);
 
-                        primitive::Atomic_fetchAdd(&dstSegment->size, 1, primitive::MEMORY_ORDER_RELAXED);
+                        primitive::Atomic64_fetchAdd(&dstSegment->size, 1, primitive::RELAXED);
                     }
-                    node = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+                    node = (const ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
                 }
             }
 
@@ -399,10 +354,10 @@ namespace Catelier::src::foundation::concurrent {
 
         primitive::Mutex_lock(&segment->mutex);
 
-        auto* bucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+        auto* bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
 
-        auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_RELAXED);
+        auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::RELAXED);
         while (node) {
             if (self->keyEquals(node->key, inKey)) {
                 if (node->value) {
@@ -419,7 +374,7 @@ namespace Catelier::src::foundation::concurrent {
                 primitive::Mutex_unlock(&segment->mutex);
                 return true;
             }
-            node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+            node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
         }
 
         auto* const newNode = (ConcurrentChainHashMapNode*) malloc(sizeof(ConcurrentChainHashMapNode));
@@ -445,38 +400,38 @@ namespace Catelier::src::foundation::concurrent {
         }
         memcpy(newNode->value, inValue, self->valueSize);
 
-        const auto oldHead = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_RELAXED);
-        primitive::Atomic_init(&newNode->nextNode, (u64) (addr) oldHead);
-        primitive::Atomic_store(&bucketArray->buckets[bucketIndex], (u64) (addr) newNode, primitive::MEMORY_ORDER_RELEASE);
+        auto* const oldHead = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::RELAXED);
+        newNode->nextNode = oldHead;
+        primitive::AtomicPtr_store((void**) &bucketArray->buckets[bucketIndex], (void*) newNode, primitive::RELEASE);
 
-        primitive::Atomic_fetchAdd(&segment->size, 1, primitive::MEMORY_ORDER_RELAXED);
+        primitive::Atomic64_fetchAdd(&segment->size, 1, primitive::RELAXED);
 
-        const usize currentSize = (usize) primitive::Atomic_load(&segment->size, primitive::MEMORY_ORDER_RELAXED);
+        const usize currentSize = (usize) primitive::Atomic64_load(&segment->size, primitive::RELAXED);
         if (currentSize * LOAD_FACTOR_DENOMINATOR > bucketArray->bucketCount * LOAD_FACTOR_NUMERATOR) {
             const usize newBucketCount = bucketArray->bucketCount * 2;
             auto* const newArray = (ConcurrentChainHashMapBucketArray*) malloc(sizeof(ConcurrentChainHashMapBucketArray));
             if (newArray) {
-                newArray->buckets = (primitive::Atomic*) calloc(newBucketCount, sizeof(primitive::Atomic));
+                newArray->buckets = (ConcurrentChainHashMapNode**) calloc(newBucketCount, sizeof(ConcurrentChainHashMapNode*));
                 if (newArray->buckets) {
                     newArray->bucketCount = newBucketCount;
 
                     for (usize i = 0; i < bucketArray->bucketCount; ++i) {
-                        auto* n = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[i], primitive::MEMORY_ORDER_RELAXED);
+                        auto* n = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[i], primitive::RELAXED);
                         while (n) {
-                            auto* const nextN = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&n->nextNode, primitive::MEMORY_ORDER_RELAXED);
+                            auto* const nextN = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &n->nextNode, primitive::RELAXED);
                             const u64 nodeHash = self->hash(n->key);
                             const usize newIndex = nodeHash & (newBucketCount - 1);
 
-                            const auto newHead = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&newArray->buckets[newIndex], primitive::MEMORY_ORDER_RELAXED);
-                            primitive::Atomic_store(&n->nextNode, (u64) (addr) newHead, primitive::MEMORY_ORDER_RELEASE);
-                            primitive::Atomic_store(&newArray->buckets[newIndex], (u64) (addr) n, primitive::MEMORY_ORDER_RELEASE);
+                            auto* const newHead = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &newArray->buckets[newIndex], primitive::RELAXED);
+                            primitive::AtomicPtr_store((void**) &n->nextNode, (void*) newHead, primitive::RELEASE);
+                            primitive::AtomicPtr_store((void**) &newArray->buckets[newIndex], (void*) n, primitive::RELEASE);
 
                             n = nextN;
                         }
-                        primitive::Atomic_store(&bucketArray->buckets[i], 0, primitive::MEMORY_ORDER_RELEASE);
+                        primitive::AtomicPtr_store((void**) &bucketArray->buckets[i], nullptr, primitive::RELEASE);
                     }
 
-                    primitive::Atomic_store(&segment->bucketArray, (u64) (addr) newArray, primitive::MEMORY_ORDER_RELEASE);
+                    primitive::AtomicPtr_store((void**) &segment->bucketArray, (void*) newArray, primitive::RELEASE);
 
                     if (segment->historyCount < HISTORY_SIZE) {
                         segment->history[segment->historyCount] = bucketArray;
@@ -515,10 +470,10 @@ namespace Catelier::src::foundation::concurrent {
 
         primitive::Mutex_lock(&segment->mutex);
 
-        auto* bucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+        auto* bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
 
-        auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_RELAXED);
+        auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::RELAXED);
         while (node) {
             if (self->keyEquals(node->key, inKey)) {
                 *oldValueSlotOut = node->value;
@@ -534,7 +489,7 @@ namespace Catelier::src::foundation::concurrent {
                 primitive::Mutex_unlock(&segment->mutex);
                 return true;
             }
-            node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+            node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
         }
 
         auto* const newNode = (ConcurrentChainHashMapNode*) malloc(sizeof(ConcurrentChainHashMapNode));
@@ -558,11 +513,11 @@ namespace Catelier::src::foundation::concurrent {
             return false;
         }
 
-        const auto oldHead = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_RELAXED);
-        primitive::Atomic_init(&newNode->nextNode, (u64) (addr) oldHead);
-        primitive::Atomic_store(&bucketArray->buckets[bucketIndex], (u64) (addr) newNode, primitive::MEMORY_ORDER_RELEASE);
+        auto* const oldHead = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::RELAXED);
+        newNode->nextNode = oldHead;
+        primitive::AtomicPtr_store((void**) &bucketArray->buckets[bucketIndex], (void*) newNode, primitive::RELEASE);
 
-        primitive::Atomic_fetchAdd(&segment->size, 1, primitive::MEMORY_ORDER_RELAXED);
+        primitive::Atomic64_fetchAdd(&segment->size, 1, primitive::RELAXED);
 
         *keySlotOut = newNode->key;
         *newValueSlotOut = newNode->value;
@@ -583,10 +538,10 @@ namespace Catelier::src::foundation::concurrent {
 
         primitive::Mutex_lock(&segment->mutex);
 
-        auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+        auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
 
-        auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_RELAXED);
+        auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::RELAXED);
         while (node) {
             if (self->keyEquals(node->key, inKey)) {
                 if (!node->value) {
@@ -597,12 +552,12 @@ namespace Catelier::src::foundation::concurrent {
                 free(node->value);
                 node->value = nullptr;
 
-                primitive::Atomic_fetchSub(&segment->size, 1, primitive::MEMORY_ORDER_RELAXED);
+                primitive::Atomic64_fetchSub(&segment->size, 1, primitive::RELAXED);
 
                 primitive::Mutex_unlock(&segment->mutex);
                 return true;
             }
-            node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+            node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
         }
 
         primitive::Mutex_unlock(&segment->mutex);
@@ -623,10 +578,10 @@ namespace Catelier::src::foundation::concurrent {
 
         primitive::Mutex_lock(&segment->mutex);
 
-        auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+        auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
 
-        auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_RELAXED);
+        auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::RELAXED);
         while (node) {
             if (self->keyEquals(node->key, inKey)) {
                 if (!node->value) {
@@ -646,12 +601,12 @@ namespace Catelier::src::foundation::concurrent {
 
                 node->value = nullptr;
 
-                primitive::Atomic_fetchSub(&segment->size, 1, primitive::MEMORY_ORDER_RELAXED);
+                primitive::Atomic64_fetchSub(&segment->size, 1, primitive::RELAXED);
 
                 primitive::Mutex_unlock(&segment->mutex);
                 return true;
             }
-            node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+            node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
         }
 
         primitive::Mutex_unlock(&segment->mutex);
@@ -670,12 +625,12 @@ namespace Catelier::src::foundation::concurrent {
 
             primitive::Mutex_lock(&segment->mutex);
 
-            auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+            auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
             for (usize j = 0; j < bucketArray->bucketCount; ++j) {
-                auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[j], primitive::MEMORY_ORDER_RELAXED);
+                auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[j], primitive::RELAXED);
                 while (node) {
-                    auto* const nextNode = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+                    auto* const nextNode = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
 
                     if (node->key) {
                         free(node->key);
@@ -688,10 +643,10 @@ namespace Catelier::src::foundation::concurrent {
                     node = nextNode;
                     removed = true;
                 }
-                primitive::Atomic_store(&bucketArray->buckets[j], 0, primitive::MEMORY_ORDER_RELEASE);
+                primitive::AtomicPtr_store((void**) &bucketArray->buckets[j], nullptr, primitive::RELEASE);
             }
 
-            primitive::Atomic_store(&segment->size, 0, primitive::MEMORY_ORDER_RELAXED);
+            primitive::Atomic64_store(&segment->size, 0, primitive::RELAXED);
 
             primitive::Mutex_unlock(&segment->mutex);
         }
@@ -709,10 +664,10 @@ namespace Catelier::src::foundation::concurrent {
         const auto* const segment = &self->segments[segmentIndex];
 
         while (true) {
-            const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_ACQUIRE);
+            const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::ACQUIRE);
             const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
 
-            const auto* node = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_ACQUIRE);
+            const auto* node = (const ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::ACQUIRE);
             while (node) {
                 if (self->keyEquals(node->key, inKey)) {
                     if (!node->value) {
@@ -722,10 +677,10 @@ namespace Catelier::src::foundation::concurrent {
                     *valueOut = node->value;
                     return true;
                 }
-                node = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
+                node = (const ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::ACQUIRE);
             }
 
-            const auto* const bucketArrayAfter = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_ACQUIRE);
+            const auto* const bucketArrayAfter = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::ACQUIRE);
             if (bucketArray == bucketArrayAfter) {
                 return false;
             }
@@ -742,15 +697,15 @@ namespace Catelier::src::foundation::concurrent {
 
             primitive::Mutex_lock(&segment->mutex);
 
-            const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+            const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
             for (usize j = 0; j < bucketArray->bucketCount; ++j) {
-                const auto* node = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[j], primitive::MEMORY_ORDER_RELAXED);
+                const auto* node = (const ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[j], primitive::RELAXED);
                 while (node) {
                     if (node->value) {
                         action(node->key, node->value, userData);
                     }
-                    node = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+                    node = (const ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
                 }
             }
 
@@ -765,12 +720,12 @@ namespace Catelier::src::foundation::concurrent {
 
         const auto* const segment = &self->segments[segmentIndex];
 
-        const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_ACQUIRE);
+        const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::ACQUIRE);
         if (bucketIndex >= bucketArray->bucketCount) {
             return nullptr;
         }
 
-        return (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[bucketIndex], primitive::MEMORY_ORDER_ACQUIRE);
+        return (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[bucketIndex], primitive::ACQUIRE);
     }
 
     auto ConcurrentChainHashMap_reserve(ConcurrentChainHashMap* self, const usize newCapacity) -> bool {
@@ -785,7 +740,7 @@ namespace Catelier::src::foundation::concurrent {
 
             primitive::Mutex_lock(&segment->mutex);
 
-            auto* bucketArray = (ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+            auto* bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
             if (bucketArray->bucketCount < newCapacity) {
                 usize newBucketCount = bucketArray->bucketCount;
@@ -795,27 +750,27 @@ namespace Catelier::src::foundation::concurrent {
 
                 auto* const newArray = (ConcurrentChainHashMapBucketArray*) malloc(sizeof(ConcurrentChainHashMapBucketArray));
                 if (newArray) {
-                    newArray->buckets = (primitive::Atomic*) calloc(newBucketCount, sizeof(primitive::Atomic));
+                    newArray->buckets = (ConcurrentChainHashMapNode**) calloc(newBucketCount, sizeof(ConcurrentChainHashMapNode*));
                     if (newArray->buckets) {
                         newArray->bucketCount = newBucketCount;
 
                         for (usize j = 0; j < bucketArray->bucketCount; ++j) {
-                            auto* node = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&bucketArray->buckets[j], primitive::MEMORY_ORDER_RELAXED);
+                            auto* node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &bucketArray->buckets[j], primitive::RELAXED);
                             while (node) {
-                                auto* const nextNode = (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_RELAXED);
+                                auto* const nextNode = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
                                 const u64 nodeHash = self->hash(node->key);
                                 const usize newIndex = nodeHash & (newBucketCount - 1);
 
-                                const auto newHead = (const ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&newArray->buckets[newIndex], primitive::MEMORY_ORDER_RELAXED);
-                                primitive::Atomic_store(&node->nextNode, (u64) (addr) newHead, primitive::MEMORY_ORDER_RELEASE);
-                                primitive::Atomic_store(&newArray->buckets[newIndex], (u64) (addr) node, primitive::MEMORY_ORDER_RELEASE);
+                                auto* const newHead = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &newArray->buckets[newIndex], primitive::RELAXED);
+                                primitive::AtomicPtr_store((void**) &node->nextNode, (void*) newHead, primitive::RELEASE);
+                                primitive::AtomicPtr_store((void**) &newArray->buckets[newIndex], (void*) node, primitive::RELEASE);
 
                                 node = nextNode;
                             }
-                            primitive::Atomic_store(&bucketArray->buckets[j], 0, primitive::MEMORY_ORDER_RELEASE);
+                            primitive::AtomicPtr_store((void**) &bucketArray->buckets[j], nullptr, primitive::RELEASE);
                         }
 
-                        primitive::Atomic_store(&segment->bucketArray, (u64) (addr) newArray, primitive::MEMORY_ORDER_RELEASE);
+                        primitive::AtomicPtr_store((void**) &segment->bucketArray, (void*) newArray, primitive::RELEASE);
 
                         if (segment->historyCount < HISTORY_SIZE) {
                             segment->history[segment->historyCount] = bucketArray;
@@ -859,7 +814,7 @@ namespace Catelier::src::foundation::concurrent {
 
         for (usize i = 0; i < self->segmentCount; ++i) {
             const auto* const segment = &self->segments[i];
-            const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) (addr) primitive::Atomic_load(&segment->bucketArray, primitive::MEMORY_ORDER_RELAXED);
+            const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
             totalCapacity += bucketArray->bucketCount;
         }
@@ -874,7 +829,7 @@ namespace Catelier::src::foundation::concurrent {
         usize totalSize = 0;
 
         for (usize i = 0; i < self->segmentCount; ++i) {
-            totalSize += (usize) primitive::Atomic_load(&self->segments[i].size, primitive::MEMORY_ORDER_RELAXED);
+            totalSize += (usize) primitive::Atomic64_load(&self->segments[i].size, primitive::RELAXED);
         }
 
         return totalSize;
@@ -921,6 +876,6 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        return (ConcurrentChainHashMapNode*) (addr) primitive::Atomic_load(&node->nextNode, primitive::MEMORY_ORDER_ACQUIRE);
+        return (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::ACQUIRE);
     }
 }
