@@ -85,7 +85,6 @@ namespace Catelier::include::foundation::concurrent {
                     this->handle = nullptr;
                 }
             }
-
             ConcurrentUnboundedQueue(const ConcurrentUnboundedQueue& other) {
                 if (!other.handle) {
                     this->handle = nullptr;

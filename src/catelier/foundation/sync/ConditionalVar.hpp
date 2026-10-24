@@ -4,7 +4,7 @@
 
 namespace Catelier::src::foundation::sync {
     typedef struct ConditionalVar {
-        alignas(8) u8 storage[64];
+        alignas(16) u8 storage[128];
         bool valid;
     } ConditionalVar;
 

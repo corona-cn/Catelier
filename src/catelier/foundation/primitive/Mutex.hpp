@@ -3,7 +3,7 @@
 
 namespace Catelier::src::foundation::primitive {
     typedef struct Mutex {
-        alignas(8) u8 storage[64];
+        alignas(16) u8 storage[64];
         bool valid;
     } Mutex;
 

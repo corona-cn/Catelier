@@ -20,7 +20,7 @@ namespace Catelier::src::foundation::primitive {
 
         struct timespec ts;
         clock_gettime(CLOCK_MONOTONIC, &ts);
-        return (u64) ts.tv_sec * 1000ULL + (u64) ts.tv_nsec / 1000000ULL;
+        return ((u64) ts.tv_sec * 1000ULL) + ((u64) ts.tv_nsec / 1000000ULL);
 
         #endif
     }

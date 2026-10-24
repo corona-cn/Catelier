@@ -17,6 +17,7 @@ namespace Catelier::src::foundation::sync {
     auto ConflatedSignal_destroy(ConflatedSignal* self) -> bool;
 
     auto ConflatedSignal_signal(ConflatedSignal* self) -> void;
+
     auto ConflatedSignal_wait(ConflatedSignal* self) -> void;
     auto ConflatedSignal_timedWait(ConflatedSignal* self, u64 timeoutMs) -> bool;
 }

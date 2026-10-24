@@ -1,5 +1,7 @@
 #include "OnceFlag.hpp"
 
+#include <cassert>
+
 #ifdef _WIN32
 
 #include <windows.h>
@@ -10,20 +12,33 @@
 
 #endif
 
-#include <cstring>
-
 namespace Catelier::src::foundation::primitive {
-    #ifdef _WIN32
     namespace {
+        #ifdef _WIN32
+
         auto asNative(const OnceFlag* self) -> INIT_ONCE* {
-            return (INIT_ONCE*) self->storage;
+            return (INIT_ONCE*) (u8*) self->storage;
         }
+
+        #else
+
+        auto asNative(const OnceFlag* self) -> pthread_once_t* {
+            return (pthread_once_t*) (u8*) self->storage;
+        }
+
+        #endif
+    }
+
+    namespace {
+        #ifdef _WIN32
 
         auto CALLBACK initOnceBridge(PINIT_ONCE, const PVOID parameter, PVOID*) -> BOOL {
             auto* const callback = (void (*)()) parameter;
             callback();
             return TRUE;
         }
+
+        #endif
     }
 
     auto OnceFlag_init(OnceFlag* self) -> bool {
@@ -31,68 +46,51 @@ namespace Catelier::src::foundation::primitive {
             return false;
         }
 
-        self->valid = false;
+        memset(self->storage, 0, sizeof(self->storage));
+
+        #ifdef _WIN32
 
         InitOnceInitialize(asNative(self));
 
+        #endif
+
         self->valid = true;
 
         return true;
     }
     auto OnceFlag_destroy(OnceFlag* self) -> bool {
-        if (!self || !self->valid) {
-            return false;
-        }
-
-        self->valid = false;
-
-        return true;
-    }
-
-    auto OnceFlag_do(const OnceFlag* self, void (*callback)()) -> bool {
-        if (!self || !self->valid || !callback) {
-            return false;
-        }
-
-        return InitOnceExecuteOnce(asNative(self), initOnceBridge, (PVOID) callback, nullptr) != 0;
-    }
-    #else
-    namespace {
-        auto asNative(const OnceFlag* self) -> pthread_once_t* {
-            return (pthread_once_t*) self->storage;
-        }
-    }
-
-    auto OnceFlag_init(OnceFlag* self) -> bool {
         if (!self) {
             return false;
         }
 
         self->valid = false;
 
-        static const pthread_once_t INIT = PTHREAD_ONCE_INIT;
-        memcpy(asNative(self), &INIT, sizeof(pthread_once_t));
+        #ifndef NDEBUG
 
-        self->valid = true;
+        memset(self->storage, 0xDE, sizeof(self->storage));
 
-        return true;
-    }
-    auto OnceFlag_destroy(OnceFlag* self) -> bool {
-        if (!self || !self->valid) {
-            return false;
-        }
-
-        self->valid = false;
+        #endif
 
         return true;
     }
 
     auto OnceFlag_do(const OnceFlag* self, void (*callback)()) -> bool {
-        if (!self || !self->valid || !callback) {
+        if (!self || !callback) {
             return false;
         }
 
-        return pthread_once(asNative(self), callback) == 0;
+        assert(self->valid);
+
+        #ifdef _WIN32
+
+        const BOOL result = InitOnceExecuteOnce(asNative(self), initOnceBridge, (PVOID) callback, nullptr);
+        return result != FALSE;
+
+        #else
+
+        const int result = pthread_once(asNative(self), callback);
+        return result == 0;
+
+        #endif
     }
-    #endif
 }

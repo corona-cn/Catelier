@@ -5,6 +5,10 @@
 namespace Catelier::include::foundation::sync {
     class ConditionalVar {
         public:
+            auto isValid() const -> bool {
+                return this->handle.valid;
+            }
+
             explicit ConditionalVar() {
                 src::foundation::sync::ConditionalVar_init(&this->handle);
             }
@@ -13,7 +17,6 @@ namespace Catelier::include::foundation::sync {
                     src::foundation::sync::ConditionalVar_destroy(&this->handle);
                 }
             }
-
             ConditionalVar(const ConditionalVar&) = delete;
             ConditionalVar(ConditionalVar&& other) noexcept {
                 this->handle = other.handle;
@@ -35,12 +38,6 @@ namespace Catelier::include::foundation::sync {
                 return *this;
             }
 
-            auto wait(primitive::Mutex& mutex) -> bool {
-                return ConditionalVar_wait(&this->handle, mutex.rawHandle());
-            }
-            auto timedWait(primitive::Mutex& mutex, const u64 timeoutMs) -> bool {
-                return src::foundation::sync::ConditionalVar_timedWait(&this->handle, mutex.rawHandle(), timeoutMs);
-            }
             auto signal() -> bool {
                 return src::foundation::sync::ConditionalVar_signal(&this->handle);
             }
@@ -48,8 +45,11 @@ namespace Catelier::include::foundation::sync {
                 return src::foundation::sync::ConditionalVar_broadcast(&this->handle);
             }
 
-            auto isValid() const -> bool {
-                return this->handle.valid;
+            auto wait(primitive::Mutex& mutex) -> bool {
+                return ConditionalVar_wait(&this->handle, mutex.rawHandle());
+            }
+            auto timedWait(primitive::Mutex& mutex, const u64 timeoutMs) -> bool {
+                return src::foundation::sync::ConditionalVar_timedWait(&this->handle, mutex.rawHandle(), timeoutMs);
             }
 
         private:

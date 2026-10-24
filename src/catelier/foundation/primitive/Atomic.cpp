@@ -7,23 +7,146 @@
 
 #endif
 
-namespace Catelier::src::foundation::primitive {
-    #ifndef _WIN32
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
 
+#define STRONG_MEMORY_MODEL
+
+#endif
+
+namespace Catelier::src::foundation::primitive {
     namespace {
+        #ifdef _WIN32
+
+        auto applyLoadBarrier(const MemoryOrder memoryOrder) -> void {
+            switch (memoryOrder) {
+                case RELAXED: break;
+                case ACQUIRE: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _ReadBarrier();
+
+                    #else
+
+                    _mm_lfence();
+
+                    #endif
+
+                    break;
+                }
+                case RELEASE: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _ReadBarrier();
+
+                    #else
+
+                    _mm_lfence();
+
+                    #endif
+
+                    break;
+                }
+                case ACQUIRE_RELEASE: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _ReadBarrier();
+
+                    #else
+
+                    _mm_mfence();
+
+                    #endif
+
+                    break;
+                }
+                case SEQUENTIAL_CONSISTENT: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _ReadBarrier();
+
+                    #else
+
+                    _mm_mfence();
+
+                    #endif
+
+                    break;
+                }
+            }
+        }
+        auto applyStoreBarrier(const MemoryOrder memoryOrder) -> void {
+            switch (memoryOrder) {
+                case RELAXED: break;
+                case ACQUIRE: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _WriteBarrier();
+
+                    #else
+
+                    _mm_mfence();
+
+                    #endif
+
+                    break;
+                }
+                case RELEASE: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _WriteBarrier();
+
+                    #else
+
+                    _mm_sfence();
+
+                    #endif
+
+                    break;
+                }
+                case ACQUIRE_RELEASE: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _WriteBarrier();
+
+                    #else
+
+                    _mm_mfence();
+
+                    #endif
+
+                    break;
+                }
+                case SEQUENTIAL_CONSISTENT: {
+                    #ifdef STRONG_MEMORY_MODEL
+
+                    _WriteBarrier();
+
+                    #else
+
+                    _mm_mfence();
+
+                    #endif
+
+                    break;
+                }
+            }
+        }
+
+        #else
+
         auto toNativeOrder(const MemoryOrder order) -> int {
             switch (order) {
-                case MEMORY_ORDER_RELAXED: return __ATOMIC_RELAXED;
-                case MEMORY_ORDER_ACQUIRE: return __ATOMIC_ACQUIRE;
-                case MEMORY_ORDER_RELEASE: return __ATOMIC_RELEASE;
-                case MEMORY_ORDER_ACQ_REL: return __ATOMIC_ACQ_REL;
-                case MEMORY_ORDER_SEQ_CST: return __ATOMIC_SEQ_CST;
+                case RELAXED: return __ATOMIC_RELAXED;
+                case ACQUIRE: return __ATOMIC_ACQUIRE;
+                case RELEASE: return __ATOMIC_RELEASE;
+                case ACQUIRE_RELEASE: return __ATOMIC_ACQ_REL;
+                case SEQUENTIAL_CONSISTENT: return __ATOMIC_SEQ_CST;
             }
             return __ATOMIC_SEQ_CST;
         }
-    }
 
-    #endif
+        #endif
+    }
 
     auto Atomic8_load(const u8* const self, const MemoryOrder order) -> u8 {
         if (!self) {
@@ -33,9 +156,7 @@ namespace Catelier::src::foundation::primitive {
         #ifdef _WIN32
 
         const u8 value = *((const volatile u8*) self);
-        if (order != RELAXED) {
-            _ReadBarrier();
-        }
+        applyLoadBarrier(order);
         return value;
 
         #else
@@ -51,10 +172,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        if (order != RELAXED) {
-            _WriteBarrier();
-        }
         *((volatile u8*) self) = value;
+        applyStoreBarrier(order);
 
         #else
 
@@ -69,7 +188,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u8) _InterlockedExchange8((volatile char*) self, (char) value);
+        const u8 old = (u8) _InterlockedExchange8((volatile char*) self, (char) value);
+        return old;
 
         #else
 
@@ -84,7 +204,7 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        const u8 original = (u8) _InterlockedCompareExchange8((volatile char*) self, (char) desired, (char) *expected);
+        const u8 original = (u8)_InterlockedCompareExchange8((volatile char*) self, (char) desired, (char) *expected);
         if (original == *expected) {
             return true;
         }
@@ -104,7 +224,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u8) _InterlockedExchangeAdd8((volatile char*) self, (char) delta);
+        const u8 old = (u8) _InterlockedExchangeAdd8((volatile char*) self, (char) delta);
+        return old;
 
         #else
 
@@ -119,7 +240,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u8) _InterlockedExchangeAdd8((volatile char*) self, (char) -delta);
+        const u8 old = (u8) _InterlockedExchangeAdd8((volatile char*) self, (char) -delta);
+        return old;
 
         #else
 
@@ -136,9 +258,7 @@ namespace Catelier::src::foundation::primitive {
         #ifdef _WIN32
 
         const u16 value = *((const volatile u16*) self);
-        if (order != RELAXED) {
-            _ReadBarrier();
-        }
+        applyLoadBarrier(order);
         return value;
 
         #else
@@ -154,10 +274,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        if (order != RELAXED) {
-            _WriteBarrier();
-        }
         *((volatile u16*) self) = value;
+        applyStoreBarrier(order);
 
         #else
 
@@ -172,7 +290,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u16) _InterlockedExchange16((volatile short*) self, (short) value);
+        const u16 old = (u16) _InterlockedExchange16((volatile short*) self, (short) value);
+        return old;
 
         #else
 
@@ -207,7 +326,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u16) _InterlockedExchangeAdd16((volatile short*) self, (short) delta);
+        const u16 old = (u16) _InterlockedExchangeAdd16((volatile short*) self, (short) delta);
+        return old;
 
         #else
 
@@ -222,7 +342,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u16) _InterlockedExchangeAdd16((volatile short*) self, (short) -delta);
+        const u16 old = (u16) _InterlockedExchangeAdd16((volatile short*) self, (short) -delta);
+        return old;
 
         #else
 
@@ -239,9 +360,7 @@ namespace Catelier::src::foundation::primitive {
         #ifdef _WIN32
 
         const u32 value = *((const volatile u32*) self);
-        if (order != RELAXED) {
-            _ReadBarrier();
-        }
+        applyLoadBarrier(order);
         return value;
 
         #else
@@ -257,10 +376,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        if (order != RELAXED) {
-            _WriteBarrier();
-        }
         *((volatile u32*) self) = value;
+        applyStoreBarrier(order);
 
         #else
 
@@ -275,7 +392,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u32) _InterlockedExchange((volatile long*) self, (long) value);
+        const u32 old = (u32) _InterlockedExchange((volatile long*) self, (long) value);
+        return old;
 
         #else
 
@@ -310,7 +428,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u32) _InterlockedExchangeAdd((volatile long*) self, (long) delta);
+        const u32 old = (u32) _InterlockedExchangeAdd((volatile long*) self, (long) delta);
+        return old;
 
         #else
 
@@ -325,7 +444,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u32) _InterlockedExchangeAdd((volatile long*) self, -(long) delta);
+        const u32 old = (u32) _InterlockedExchangeAdd((volatile long*) self, -(long) delta);
+        return old;
 
         #else
 
@@ -341,10 +461,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        const u64 value = (u64) *((const volatile LONG64*) self);
-        if (order != RELAXED) {
-            _ReadBarrier();
-        }
+        const u64 value = (u64)*((const volatile LONG64*) self);
+        applyLoadBarrier(order);
         return value;
 
         #else
@@ -360,10 +478,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        if (order != RELAXED) {
-            _WriteBarrier();
-        }
-        *((volatile LONG64*) self) = (LONG64) value;
+        *((volatile LONG64*) self) = (LONG64)value;
+        applyStoreBarrier(order);
 
         #else
 
@@ -378,7 +494,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u64) _InterlockedExchange64((volatile LONG64*) self, (LONG64) value);
+        const u64 old = (u64) _InterlockedExchange64((volatile LONG64*) self, (LONG64) value);
+        return old;
 
         #else
 
@@ -413,7 +530,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u64) _InterlockedExchangeAdd64((volatile LONG64*) self, (LONG64) delta);
+        const u64 old = (u64) _InterlockedExchangeAdd64((volatile LONG64*) self, (LONG64) delta);
+        return old;
 
         #else
 
@@ -428,7 +546,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return (u64) _InterlockedExchangeAdd64((volatile LONG64*) self, -(LONG64) delta);
+        const u64 old = (u64) _InterlockedExchangeAdd64((volatile LONG64*) self, -(LONG64) delta);
+        return old;
 
         #else
 
@@ -445,9 +564,7 @@ namespace Catelier::src::foundation::primitive {
         #ifdef _WIN32
 
         void* const value = *((void* const volatile*) self);
-        if (order != RELAXED) {
-            _ReadBarrier();
-        }
+        applyLoadBarrier(order);
         return value;
 
         #else
@@ -463,10 +580,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        if (order != RELAXED) {
-            _WriteBarrier();
-        }
         *((void* volatile*) self) = value;
+        applyStoreBarrier(order);
 
         #else
 
@@ -481,7 +596,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return _InterlockedExchangePointer((void* volatile*) self, value);
+        void* old = _InterlockedExchangePointer((void* volatile*) self, value);
+        return old;
 
         #else
 
@@ -518,9 +634,7 @@ namespace Catelier::src::foundation::primitive {
         #ifdef _WIN32
 
         const u8 value = *((const volatile u8*) self);
-        if (order != RELAXED) {
-            _ReadBarrier();
-        }
+        applyLoadBarrier(order);
         return value != 0;
 
         #else
@@ -536,10 +650,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        if (order != RELAXED) {
-            _WriteBarrier();
-        }
         *((volatile u8*) self) = value ? 1 : 0;
+        applyStoreBarrier(order);
 
         #else
 
@@ -554,7 +666,8 @@ namespace Catelier::src::foundation::primitive {
 
         #ifdef _WIN32
 
-        return _InterlockedExchange8((volatile char*) self, (char) (value ? 1 : 0)) != 0;
+        const bool old = _InterlockedExchange8((volatile char*) self, (char) (value ? 1 : 0)) != 0;
+        return old;
 
         #else
 

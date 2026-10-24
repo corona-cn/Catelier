@@ -97,10 +97,24 @@ namespace Catelier::test::architecture::imp {
             const double opsPerSec = nsPerOp > 0.0 ? 1e9 / nsPerOp : 0.0;
             LOG(label, "：", nsPerOp, " ns/op（", opsPerSec / 1e6, " M op/s），标准差 ", sdNs, " ns，总 ", totalOps, " 次");
         }
+
+        auto logConcurrentMetrics(const int threads, const int readers, const int writers, const double readNs, const double writeNs) -> void {
+            if (readers > 0 && writers > 0) {
+                const double rOps = readNs > 0.0 ? 1e9 / readNs : 0.0;
+                const double wOps = writeNs > 0.0 ? 1e9 / writeNs : 0.0;
+                LOG(threads, " 线程（", readers, " 读 ", writers, " 写）：读 ", readNs, " ns/op（", rOps / 1e6, " M op/s），写 ", writeNs, " ns/op（", wOps / 1e6, " M op/s）");
+            } else if (readers > 0) {
+                const double rOps = readNs > 0.0 ? 1e9 / readNs : 0.0;
+                LOG(threads, " 线程（纯读）：读 ", readNs, " ns/op（", rOps / 1e6, " M op/s）");
+            } else if (writers > 0) {
+                const double wOps = writeNs > 0.0 ? 1e9 / writeNs : 0.0;
+                LOG(threads, " 线程（纯写）：写 ", writeNs, " ns/op（", wOps / 1e6, " M op/s）");
+            }
+        }
     }
 
     auto runTests() -> void {
-        using namespace Catelier::architecture::imp;
+        using namespace Catelier::include::architecture::imp;
 
         LOG("===== IMPList 深度测试开始 =====");
         LOGGER_INDENT_BLOCK(true) {
@@ -192,22 +206,7 @@ namespace Catelier::test::architecture::imp {
 
                 list.merge();
                 const usize afterRemove = list.presentElementCount();
-                LOG("merge 后 presentElementCount = ", afterRemove, "（per-chunk 语义：每个 chunk 删一个 5）");
-
-                int toRemove[3] = { 0, 2, 4 };
-                const bool removedAll = list.removeAll(toRemove, 3);
-                LOG("removeAll({0,2,4}) = ", removedAll ? "PASS" : "FAIL");
-
-                list.merge();
-                bool noEvens = true;
-                for (usize i = 0; i < list.presentElementCount(); ++i) {
-                    const int v = *list.get(i);
-                    if (v == 0 || v == 2 || v == 4) {
-                        noEvens = false;
-                        break;
-                    }
-                }
-                LOG("removeAll 后无残留：", noEvens ? "PASS" : "FAIL");
+                LOG("merge 后 presentElementCount = ", afterRemove, "（全量删除语义：所有 5 均被移除，应为 90）");
             }
 
             LOG("--- [正确性] removeIf / retainIf 语义 ---");
@@ -237,7 +236,7 @@ namespace Catelier::test::architecture::imp {
                 }
                 list2.merge();
 
-                const bool retained = list2.retainIf(intOddPredicate);
+                const bool retained = list2.removeExceptIf(intOddPredicate);
                 LOG("retainIf(奇数) = ", retained ? "PASS" : "FAIL");
                 list2.merge();
                 LOG("retainIf 后 presentElementCount = ", list2.presentElementCount(), "（应为 50）");
@@ -252,7 +251,8 @@ namespace Catelier::test::architecture::imp {
                 list.merge();
                 LOG("clear 前 present = ", list.presentElementCount(), "（应为 20）");
 
-                list.clear();
+                list.removeAll();
+                list.merge();
                 LOG("clear 后 present = ", list.presentElementCount(), "（应为 0）");
                 LOG("clear 后 isEmpty = ", list.isEmpty() ? "PASS" : "FAIL");
 
@@ -262,7 +262,8 @@ namespace Catelier::test::architecture::imp {
                 LOG("值正确：", *((const int*) list.get(0)) == 100 ? "PASS" : "FAIL");
 
                 auto list2 = IMPList<int>(64, 1000, intEquals);
-                list2.clear();
+                list2.removeAll();
+                list2.merge();
                 LOG("空列表 clear → present = ", list2.presentElementCount(), "（应为 0）");
             }
 
@@ -435,61 +436,6 @@ namespace Catelier::test::architecture::imp {
                     }
                 }
                 LOG("数据完整性：", (dataIntact && allSeen) ? "PASS" : "FAIL");
-            }
-
-            LOG("--- [并发] 读写混合 10 秒压力 ---");
-            LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(512, 1, intEquals);
-                for (int i = 0; i < 1000; ++i) {
-                    list.add(i);
-                }
-                list.merge();
-
-                std::atomic<bool> running = { true };
-                std::atomic<u64> totalWrites = { 0 };
-                std::atomic<u64> totalReads = { 0 };
-
-                std::vector<std::thread> writers;
-                for (int w = 0; w < 2; ++w) {
-                    writers.emplace_back([&list, &running, &totalWrites, w]() {
-                        u64 local = 0;
-                        int counter = w * 100000000;
-                        while (running.load(std::memory_order_relaxed)) {
-                            list.add(counter++);
-                            local++;
-                        }
-                        totalWrites.fetch_add(local);
-                    });
-                }
-
-                std::vector<std::thread> readers;
-                for (int r = 0; r < 4; ++r) {
-                    readers.emplace_back([&list, &running, &totalReads]() {
-                        u64 local = 0;
-                        while (running.load(std::memory_order_relaxed)) {
-                            const usize count = list.presentElementCount();
-                            if (count > 0) {
-                                const int* v = list.get((usize) (local % count));
-                                if (v) {
-                                    local++;
-                                }
-                            }
-                        }
-                        totalReads.fetch_add(local);
-                    });
-                }
-
-                std::this_thread::sleep_for(std::chrono::seconds(10));
-                running.store(false);
-
-                for (auto& t : writers) {
-                    t.join();
-                }
-                for (auto& t : readers) {
-                    t.join();
-                }
-
-                LOG("10 秒压力：写 ", totalWrites.load(), " 次，读 ", totalReads.load(), " 次，最终 present = ", list.presentElementCount());
             }
 
             LOG("--- [并发] 线程退出（写线程 join 触发 threadExitCallback） ---");
@@ -686,6 +632,114 @@ namespace Catelier::test::architecture::imp {
                 }
             }
 
+            LOG("--- [性能] 高并发读写延迟（分线程数与读写比例） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr int threadConfigs[] = {
+                    1, 2, 4, 8
+                };
+                struct ReadWriteRatio {
+                    int readers;
+                    int writers;
+                };
+                const ReadWriteRatio ratios[] = {
+                    { 1, 1 }, // 1读1写
+                    { 1, 4 }, // 写密集 (1:4)
+                    { 4, 1 }, // 读密集 (4:1)
+                    { 1, 0 }, // 纯读
+                    { 0, 1 }  // 纯写
+                };
+
+                QpcTimer timer;
+
+                for (int baseThreads : threadConfigs) {
+                    for (const auto& ratio : ratios) {
+                        int rThreads = ratio.readers * baseThreads;
+                        int wThreads = ratio.writers * baseThreads;
+                        int totalThreads = rThreads + wThreads;
+
+                        if (totalThreads == 0) {
+                            continue;
+                        }
+
+                        auto list = IMPList<int>(1024, 1, intEquals);
+                        list.configureRetirement(4096);
+                        for (int i = 0; i < 10000; ++i) {
+                            list.add(i);
+                        }
+                        list.merge();
+
+                        std::atomic<bool> running = { true };
+
+                        std::atomic<u64> totalReads = { 0 };
+                        std::atomic<u64> totalWrites = { 0 };
+                        std::atomic<u64> readTimeNs = { 0 };
+                        std::atomic<u64> writeTimeNs = { 0 };
+
+                        std::vector<std::thread> threads;
+
+                        for (int r = 0; r < rThreads; ++r) {
+                            threads.emplace_back([&list, &running, &totalReads, &readTimeNs]() {
+                                u64 localReads = 0;
+                                volatile int accum = 0;
+
+                                QpcTimer localTimer;
+                                localTimer.start();
+
+                                while (running.load(std::memory_order_relaxed)) {
+                                    const usize count = list.presentElementCount();
+                                    if (count > 0) {
+                                        for (int k = 0; k < 100; ++k) {
+                                            const int* v = list.get((usize) ((localReads + k) % count));
+                                            if (v) {
+                                                accum += *v;
+                                            }
+                                        }
+                                        localReads += 100;
+                                    }
+                                }
+
+                                u64 elapsed = localTimer.stopNs();
+                                totalReads.fetch_add(localReads, std::memory_order_relaxed);
+                                readTimeNs.fetch_add(elapsed, std::memory_order_relaxed);
+                            });
+                        }
+
+                        for (int w = 0; w < wThreads; ++w) {
+                            threads.emplace_back([&list, &running, &totalWrites, &writeTimeNs, w]() {
+                                u64 localWrites = 0;
+                                int counter = w * 100000000;
+
+                                QpcTimer localTimer;
+                                localTimer.start();
+
+                                while (running.load(std::memory_order_relaxed)) {
+                                    for (int k = 0; k < 100; ++k) {
+                                        list.add(counter++);
+                                    }
+                                    localWrites += 100;
+                                }
+
+                                u64 elapsed = localTimer.stopNs();
+                                totalWrites.fetch_add(localWrites, std::memory_order_relaxed);
+                                writeTimeNs.fetch_add(elapsed, std::memory_order_relaxed);
+                            });
+                        }
+
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                        running.store(false, std::memory_order_relaxed);
+
+                        for (auto& t : threads) {
+                            t.join();
+                        }
+
+                        double rNs = totalReads.load() > 0 ? (double)readTimeNs.load() / (double)totalReads.load() : 0.0;
+                        double wNs = totalWrites.load() > 0 ? (double)writeTimeNs.load() / (double)totalWrites.load() : 0.0;
+
+                        logConcurrentMetrics(totalThreads, rThreads, wThreads, rNs, wNs);
+                    }
+                }
+            }
+
             LOG("--- [性能] merge 单独成本（不同 chunkSize） ---");
             LOGGER_INDENT_BLOCK(true) {
                 const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
@@ -715,29 +769,44 @@ namespace Catelier::test::architecture::imp {
             LOG("--- [性能] move 常数时间（不同规模） ---");
             LOGGER_INDENT_BLOCK(true) {
                 constexpr u32 sizes[] = { 100, 10000, 1000000 };
+                constexpr u32 kMoveIters = 100000;
 
                 for (u32 n : sizes) {
+                    auto list = IMPList<int>(1024, 100000, intEquals);
+                    for (u32 i = 0; i < n; ++i) {
+                        list.add((int) i);
+                    }
+                    list.merge();
+                    list.awaitMerging();
+
                     static u64 samples[BENCH_TRIALS];
                     QpcTimer timer;
 
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 100000, intEquals);
-                        for (u32 i = 0; i < n; ++i) {
-                            list.add((int) i);
-                        }
-                        list.merge();
+                    bool intact = true;
 
+                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         timer.start();
-                        auto moved = std::move(list);
-                        samples[t] = timer.stopNs();
-                        if (!moved.isValid() || moved.presentElementCount() != n) {
-                            LOG("impossible");
+                        for (u32 i = 0; i < kMoveIters; ++i) {
+                            auto moved = std::move(list);
+                            std::atomic_signal_fence(std::memory_order_seq_cst);
+                            list = std::move(moved);
+                            std::atomic_signal_fence(std::memory_order_seq_cst);
+                        }
+                        samples[t] = timer.stopNs() * 10000 / kMoveIters;
+
+                        if (!list.isValid() || list.presentElementCount() != n) {
+                            intact = false;
                         }
                     }
 
+                    if (!intact) {
+                        LOG("impossible");
+                    }
+
                     sortU64(samples, BENCH_TRIALS);
-                    const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM);
-                    LOG("move ", n, " 元素：平均 ", m, " ns（应为常数）");
+                    const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10000.0;
+                    const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10000.0) / 10000.0;
+                    LOG("move ", n, " 元素：平均 ", m, " ns/op，标准差 ", sd, " ns，中位数 ", samples[BENCH_TRIALS / 2] / 10000, " ns（", BENCH_TRIALS, " 轮掐头去尾，每轮 ", kMoveIters, " 次）");
                 }
             }
 
@@ -757,7 +826,7 @@ namespace Catelier::test::architecture::imp {
                         list.merge();
 
                         timer.start();
-                        list.clear();
+                        list.removeAll();
                         samples[t] = timer.stopNs();
                     }
 

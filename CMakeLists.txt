@@ -108,18 +108,12 @@ add_executable(Catelier
 	src/catelier/foundation/CircularLinkedList.hpp
 	src/catelier/foundation/CircularLinkedList.cpp
 	include/catelier/foundation/CircularLinkedList.hpp
-	src/catelier/foundation/primitive/ThreadKey.hpp
-	src/catelier/foundation/primitive/ThreadKey.cpp
-	include/catelier/foundation/primitive/ThreadKey.hpp
 	src/catelier/foundation/primitive/Mutex.hpp
 	src/catelier/foundation/primitive/Mutex.cpp
 	include/catelier/foundation/primitive/Mutex.hpp
 	src/catelier/foundation/primitive/OnceFlag.hpp
 	src/catelier/foundation/primitive/OnceFlag.cpp
 	include/catelier/foundation/primitive/OnceFlag.hpp
-	src/catelier/foundation/concurrency/ThreadLocal.hpp
-	src/catelier/foundation/concurrency/ThreadLocal.cpp
-	include/catelier/foundation/concurrency/ThreadLocal.hpp
 	src/catelier/foundation/primitive/Atomic.hpp
 	src/catelier/foundation/primitive/Atomic.cpp
 	include/catelier/foundation/primitive/Atomic.hpp
@@ -145,6 +139,9 @@ add_executable(Catelier
 	src/catelier/foundation/primitive/Time.cpp
 	include/catelier/foundation/primitive/Time.hpp
 	test/catelier/architecture/imp/IMPList.cpp
+	"src/catelier/foundation/concurrency/ThreadLocalTable.hpp"
+	include/catelier/foundation/concurrency/ThreadLocalTable.hpp
+	src/catelier/foundation/concurrency/ThreadLocalTable.cpp
 )
 
 

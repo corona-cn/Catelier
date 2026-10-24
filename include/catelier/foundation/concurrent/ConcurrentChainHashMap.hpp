@@ -226,7 +226,6 @@ namespace Catelier::include::foundation::concurrent {
                     this->handle = nullptr;
                 }
             }
-
             ConcurrentChainHashMap(const ConcurrentChainHashMap& other) {
                 if (!other.handle) {
                     this->handle = nullptr;

@@ -6,6 +6,10 @@
 namespace Catelier::include::foundation::primitive {
     class Thread {
         public:
+            auto isValid() const -> bool {
+                return this->handle.valid;
+            }
+
             explicit Thread() {
                 src::foundation::primitive::Thread_init(&this->handle);
             }
@@ -18,33 +22,30 @@ namespace Catelier::include::foundation::primitive {
                     src::foundation::primitive::Thread_destroy(&this->handle);
                 }
             }
-
             Thread(const Thread&) = delete;
             Thread(Thread&&) = delete;
             Thread& operator = (const Thread&) = delete;
             Thread& operator = (Thread&&) = delete;
 
-            auto start(const src::foundation::primitive::Thread_EntryFunc entry, void* userData = nullptr) -> bool {
+            auto isStarted() const -> bool {
+                return this->handle.started;
+            }
+            static auto currentId() -> u64 {
+                return src::foundation::primitive::Thread_currentId();
+            }
+
+            auto start(void (*entry)(void* userData), void* userData = nullptr) -> bool {
                 return src::foundation::primitive::Thread_start(&this->handle, entry, userData);
             }
 
             auto join() -> bool {
                 return src::foundation::primitive::Thread_join(&this->handle);
             }
+
             auto detach() -> bool {
                 return src::foundation::primitive::Thread_detach(&this->handle);
             }
 
-            auto isValid() const -> bool {
-                return this->handle.valid;
-            }
-            auto isStarted() const -> bool {
-                return this->handle.started;
-            }
-
-            static auto currentId() -> u64 {
-                return src::foundation::primitive::Thread_currentId();
-            }
             static auto yield() -> void {
                 src::foundation::primitive::Thread_yield();
             }

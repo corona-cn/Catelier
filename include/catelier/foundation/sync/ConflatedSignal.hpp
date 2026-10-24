@@ -4,6 +4,10 @@
 namespace Catelier::include::foundation::sync {
     class ConflatedSignal {
         public:
+            auto isValid() const -> bool {
+                return this->handle.valid;
+            }
+
             explicit ConflatedSignal() {
                 src::foundation::sync::ConflatedSignal_init(&this->handle);
             }
@@ -12,7 +16,6 @@ namespace Catelier::include::foundation::sync {
                     src::foundation::sync::ConflatedSignal_destroy(&this->handle);
                 }
             }
-
             ConflatedSignal(const ConflatedSignal&) = delete;
             ConflatedSignal(ConflatedSignal&&) = delete;
             ConflatedSignal& operator = (const ConflatedSignal&) = delete;
@@ -21,15 +24,12 @@ namespace Catelier::include::foundation::sync {
             auto signal() -> void {
                 src::foundation::sync::ConflatedSignal_signal(&this->handle);
             }
+
             auto wait() -> void {
                 src::foundation::sync::ConflatedSignal_wait(&this->handle);
             }
-            auto timedWait(u64 timeoutMs) -> bool {
+            auto timedWait(const u64 timeoutMs) -> bool {
                 return src::foundation::sync::ConflatedSignal_timedWait(&this->handle, timeoutMs);
-            }
-
-            auto isValid() const -> bool {
-                return this->handle.valid;
             }
 
         private:

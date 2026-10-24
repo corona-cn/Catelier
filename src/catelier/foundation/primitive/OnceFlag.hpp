@@ -3,7 +3,7 @@
 
 namespace Catelier::src::foundation::primitive {
     typedef struct OnceFlag {
-        alignas(8) u8 storage[16];
+        alignas(16) u8 storage[32];
         bool valid;
     } OnceFlag;
 

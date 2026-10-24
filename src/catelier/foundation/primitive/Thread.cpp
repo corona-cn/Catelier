@@ -3,7 +3,6 @@
 #ifdef _WIN32
 
 #include <windows.h>
-#include <process.h>
 
 #else
 
@@ -14,21 +13,22 @@
 #endif
 
 namespace Catelier::src::foundation::primitive {
-    #ifdef _WIN32
     namespace {
         typedef struct ThreadContext {
-            Thread_EntryFunc entry;
+            void (*entry)(void*);
             void* userData;
         } ThreadContext;
+
+        #ifdef _WIN32
 
         auto asNative(const Thread* self) -> HANDLE* {
             return (HANDLE*) self->storage;
         }
 
-        auto __stdcall threadEntryBridge(void* parameter) -> unsigned {
+        auto WINAPI threadEntryBridge(void* parameter) -> DWORD {
             auto* const context = (ThreadContext*) parameter;
 
-            const Thread_EntryFunc entry = context->entry;
+            void (*const entry)(void*) = context->entry;
             void* const userData = context->userData;
 
             free(context);
@@ -37,93 +37,8 @@ namespace Catelier::src::foundation::primitive {
 
             return 0;
         }
-    }
 
-    auto Thread_init(Thread* self) -> bool {
-        if (!self || self->valid) {
-            return false;
-        }
-
-        *(asNative(self)) = nullptr;
-        self->valid = true;
-        self->started = false;
-
-        return true;
-    }
-    auto Thread_destroy(Thread* self) -> bool {
-        if (!self || !self->valid || self->started) {
-            return false;
-        }
-
-        *(asNative(self)) = nullptr;
-        self->valid = false;
-
-        return true;
-    }
-
-    auto Thread_start(Thread* self, const Thread_EntryFunc entry, void* userData) -> bool {
-        if (!self || !self->valid || self->started || !entry) {
-            return false;
-        }
-
-        auto* const context = (ThreadContext*) malloc(sizeof(ThreadContext));
-        if (!context) {
-            return false;
-        }
-
-        context->entry = entry;
-        context->userData = userData;
-
-        const addr handle = _beginthreadex(nullptr, 0, threadEntryBridge, context, 0, nullptr);
-        if (handle == 0) {
-            free(context);
-            return false;
-        }
-
-        *(asNative(self)) = (HANDLE) handle;
-        self->started = true;
-
-        return true;
-    }
-    auto Thread_join(Thread* self) -> bool {
-        if (!self || !self->valid || !self->started) {
-            return false;
-        }
-
-        const HANDLE handle = *(asNative(self));
-        WaitForSingleObject(handle, INFINITE);
-        CloseHandle(handle);
-
-        *(asNative(self)) = nullptr;
-        self->started = false;
-
-        return true;
-    }
-    auto Thread_detach(Thread* self) -> bool {
-        if (!self || !self->valid || !self->started) {
-            return false;
-        }
-
-        CloseHandle(*(asNative(self)));
-
-        *(asNative(self)) = nullptr;
-        self->started = false;
-
-        return true;
-    }
-
-    auto Thread_currentId() -> u64 {
-        return (u64) GetCurrentThreadId();
-    }
-    auto Thread_yield() -> void {
-        SwitchToThread();
-    }
-    #else
-    namespace {
-        typedef struct ThreadContext {
-            Thread_EntryFunc entry;
-            void* userData;
-        } ThreadContext;
+        #else
 
         auto asNative(const Thread* self) -> pthread_t* {
             return (pthread_t*) self->storage;
@@ -132,7 +47,7 @@ namespace Catelier::src::foundation::primitive {
         auto threadEntryBridge(void* parameter) -> void* {
             auto* const context = (ThreadContext*) parameter;
 
-            const Thread_EntryFunc entry = context->entry;
+            void (*const entry)(void*) = context->entry;
             void* const userData = context->userData;
 
             free(context);
@@ -141,6 +56,8 @@ namespace Catelier::src::foundation::primitive {
 
             return nullptr;
         }
+
+        #endif
     }
 
     auto Thread_init(Thread* self) -> bool {
@@ -148,24 +65,58 @@ namespace Catelier::src::foundation::primitive {
             return false;
         }
 
-        memset(asNative(self), 0, sizeof(pthread_t));
+        memset(self->storage, 0, sizeof(self->storage));
         self->valid = true;
         self->started = false;
 
         return true;
     }
     auto Thread_destroy(Thread* self) -> bool {
-        if (!self || !self->valid || self->started) {
+        if (!self || !self->valid) {
             return false;
         }
 
-        memset(asNative(self), 0, sizeof(pthread_t));
+        if (self->started) {
+            #ifdef _WIN32
+
+            CloseHandle(*asNative(self));
+
+            #else
+
+            pthread_detach(*asNative(self));
+
+            #endif
+
+            self->started = false;
+        }
+
         self->valid = false;
+
+        #ifndef NDEBUG
+
+        memset(self->storage, 0xDE, sizeof(self->storage));
+
+        #endif
 
         return true;
     }
 
-    auto Thread_start(Thread* self, const Thread_EntryFunc entry, void* userData) -> bool {
+    auto Thread_currentId() -> u64 {
+        #ifdef _WIN32
+
+        return (u64) GetCurrentThreadId();
+
+        #else
+
+        const pthread_t self = pthread_self();
+        u64 id = 0;
+        memcpy(&id, &self, sizeof(pthread_t) < sizeof(u64) ? sizeof(pthread_t) : sizeof(u64));
+        return id;
+
+        #endif
+    }
+
+    auto Thread_start(Thread* self, void (*const entry)(void*), void* const userData) -> bool {
         if (!self || !self->valid || self->started || !entry) {
             return false;
         }
@@ -178,43 +129,83 @@ namespace Catelier::src::foundation::primitive {
         context->entry = entry;
         context->userData = userData;
 
-        if (pthread_create(asNative(self), nullptr, threadEntryBridge, context) != 0) {
+        #ifdef _WIN32
+
+        const HANDLE handle = CreateThread(nullptr, 0, threadEntryBridge, context, 0, nullptr);
+        if (!handle) {
             free(context);
             return false;
         }
+
+        *asNative(self) = handle;
+
+        #else
+
+        pthread_t thread;
+        if (pthread_create(&thread, nullptr, threadEntryBridge, context) != 0) {
+            free(context);
+            return false;
+        }
+
+        *asNative(self) = thread;
+
+        #endif
 
         self->started = true;
 
         return true;
     }
+
     auto Thread_join(Thread* self) -> bool {
         if (!self || !self->valid || !self->started) {
             return false;
         }
 
+        #ifdef _WIN32
+
+        WaitForSingleObject(*asNative(self), INFINITE);
+        CloseHandle(*asNative(self));
+
+        #else
+
         pthread_join(*asNative(self), nullptr);
+
+        #endif
 
         self->started = false;
 
         return true;
     }
+
     auto Thread_detach(Thread* self) -> bool {
         if (!self || !self->valid || !self->started) {
             return false;
         }
 
+        #ifdef _WIN32
+
+        CloseHandle(*asNative(self));
+
+        #else
+
         pthread_detach(*asNative(self));
+
+        #endif
 
         self->started = false;
 
         return true;
     }
 
-    auto Thread_currentId() -> u64 {
-        return (u64) pthread_self();
-    }
     auto Thread_yield() -> void {
+        #ifdef _WIN32
+
+        SwitchToThread();
+
+        #else
+
         sched_yield();
+
+        #endif
     }
-    #endif
 }

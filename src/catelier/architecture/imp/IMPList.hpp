@@ -14,10 +14,12 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_destruct(IMPList* self) -> bool;
     auto IMPList_copy(const IMPList* self) -> IMPList*;
 
-    auto IMPList_presentElements(const IMPList* self) -> const u8*;
-    auto IMPList_presentElementsCopy(const IMPList* self, u8** outElements, usize* outElementCount) -> bool;
-    auto IMPList_presentElementCount(const IMPList* self) -> usize;
+    auto IMPList_configureRetirement(IMPList* self, usize inRetiredPresentElementsCapacity) -> bool;
+
     auto IMPList_presentElementsSpan(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
+    auto IMPList_presentElementsSpanCopy(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
+    auto IMPList_presentElements(const IMPList* self) -> const u8*;
+    auto IMPList_presentElementCount(const IMPList* self) -> usize;
     auto IMPList_ingestElementCount(const IMPList* self) -> usize;
     auto IMPList_mergeElementCount(const IMPList* self) -> usize;
     auto IMPList_mergeCount(const IMPList* self) -> usize;
@@ -31,11 +33,10 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_addAll(IMPList* self, const void* inElements, usize inElementCount) -> bool;
 
     auto IMPList_remove(IMPList* self, const void* inElement) -> bool;
-    auto IMPList_removeAll(IMPList* self, const void* inElements, usize inElementCount) -> bool;
     auto IMPList_removeIf(IMPList* self, bool (*inPredicate)(const void*, void*), void* inPredicateContext) -> bool;
-    auto IMPList_retain(IMPList* self, const void* inElements, usize inElementCount) -> bool;
-    auto IMPList_retainIf(IMPList* self, bool (*inPredicate)(const void*, void*), void* inPredicateContext) -> bool;
-    auto IMPList_clear(IMPList* self) -> bool;
+    auto IMPList_removeExcept(IMPList* self, const void* inElements, usize inElementCount) -> bool;
+    auto IMPList_removeExceptIf(IMPList* self, bool (*inPredicate)(const void*, void*), void* inPredicateContext) -> bool;
+    auto IMPList_removeAll(IMPList* self) -> bool;
 
     auto IMPList_find(const IMPList* self, const void* inElement) -> const void*;
     auto IMPList_contains(const IMPList* self, const void* inElement) -> bool;

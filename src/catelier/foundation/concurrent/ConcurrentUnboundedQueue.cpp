@@ -4,7 +4,7 @@
 #include <cstring>
 
 #include "../primitive/Atomic.hpp"
-#include "../concurrency/ThreadLocal.hpp"
+#include "../concurrency/ThreadLocalTable.hpp"
 
 namespace Catelier::src::foundation::concurrent {
     namespace {
@@ -28,7 +28,7 @@ namespace Catelier::src::foundation::concurrent {
         ConcurrentUnboundedQueueNode* tail;
         u64 size;
         usize elementSize;
-        concurrency::ThreadLocal threadState;
+        concurrency::ThreadLocalTable threadState;
         bool valid;
     } ConcurrentUnboundedQueue;
 
@@ -89,25 +89,10 @@ namespace Catelier::src::foundation::concurrent {
                 }
             }
         }
+    }
 
-        auto threadStateInit(void* userData) -> void* {
-            (void) userData;
-
-            auto* const state = (ConcurrentUnboundedQueueThreadState*) malloc(sizeof(ConcurrentUnboundedQueueThreadState));
-            if (!state) {
-                return nullptr;
-            }
-
-            state->inDequeue = false;
-            state->retiredHead = nullptr;
-            state->retiredCount = 0;
-
-            return state;
-        }
-        auto threadStateExit(void* value, void* userData) -> void {
-            (void) userData;
-
-            auto* const state = (ConcurrentUnboundedQueueThreadState*) value;
+    namespace {
+        auto freeThreadState(ConcurrentUnboundedQueueThreadState* const state) -> void {
             if (!state) {
                 return;
             }
@@ -122,11 +107,42 @@ namespace Catelier::src::foundation::concurrent {
             free(state);
         }
 
-        auto scanCallback(void* value, void* userData) -> void {
+        auto threadStateCreateCallback(void* hostContext) -> void* {
+            (void) hostContext;
+
+            auto* const state = (ConcurrentUnboundedQueueThreadState*) malloc(sizeof(ConcurrentUnboundedQueueThreadState));
+            if (!state) {
+                return nullptr;
+            }
+
+            state->inDequeue = false;
+            state->retiredHead = nullptr;
+            state->retiredCount = 0;
+
+            return state;
+        }
+        auto threadStateThreadExitCallback(void* value, void* hostContext) -> void* {
+            (void) hostContext;
+
+            freeThreadState((ConcurrentUnboundedQueueThreadState*) value);
+
+            return nullptr;
+        }
+        auto threadStateDestroyCallback(void* value, void* hostContext) -> void {
+            (void) hostContext;
+
+            freeThreadState((ConcurrentUnboundedQueueThreadState*) value);
+        }
+
+        auto scanCallback(void* value, bool isThreadExited, void* userData) -> void {
             const auto* const state = (const ConcurrentUnboundedQueueThreadState*) value;
             auto* const allIdle = (bool*) userData;
 
             if (!state || !allIdle) {
+                return;
+            }
+
+            if (isThreadExited) {
                 return;
             }
 
@@ -159,7 +175,7 @@ namespace Catelier::src::foundation::concurrent {
         self->tail = dummy;
         self->size = 0;
 
-        if (!concurrency::ThreadLocal_construct(&self->threadState, threadStateInit, threadStateExit, threadStateExit, nullptr)) {
+        if (!concurrency::ThreadLocalTable_construct(&self->threadState, threadStateCreateCallback, threadStateThreadExitCallback, threadStateDestroyCallback, nullptr)) {
             freeNode(dummy);
             free(self);
             return nullptr;
@@ -176,7 +192,7 @@ namespace Catelier::src::foundation::concurrent {
 
         self->valid = false;
 
-        concurrency::ThreadLocal_destruct(&self->threadState);
+        concurrency::ThreadLocalTable_destruct(&self->threadState);
 
         auto* head = (ConcurrentUnboundedQueueNode*) primitive::AtomicPtr_load((void* const*) &self->head, primitive::RELAXED);
         while (head) {
@@ -189,7 +205,6 @@ namespace Catelier::src::foundation::concurrent {
 
         return true;
     }
-
     auto ConcurrentUnboundedQueue_copy(const ConcurrentUnboundedQueue* self) -> ConcurrentUnboundedQueue* {
         if (!self || !self->valid) {
             return nullptr;
@@ -233,7 +248,7 @@ namespace Catelier::src::foundation::concurrent {
         newSelf->tail = (ConcurrentUnboundedQueueNode*) primitive::AtomicPtr_load((void* const*) &self->tail, primitive::RELAXED);
         newSelf->size = primitive::Atomic64_load(&self->size, primitive::RELAXED);
 
-        if (!concurrency::ThreadLocal_move(&newSelf->threadState, &self->threadState)) {
+        if (!concurrency::ThreadLocalTable_move(&newSelf->threadState, &self->threadState)) {
             free(newSelf);
             return nullptr;
         }
@@ -250,7 +265,7 @@ namespace Catelier::src::foundation::concurrent {
         primitive::AtomicPtr_store((void**) &self->tail, (void*) dummy, primitive::RELAXED);
         primitive::Atomic64_store(&self->size, 0, primitive::RELAXED);
 
-        if (!concurrency::ThreadLocal_construct(&self->threadState, threadStateInit, threadStateExit, threadStateExit, nullptr)) {
+        if (!concurrency::ThreadLocalTable_construct(&self->threadState, threadStateCreateCallback, threadStateThreadExitCallback, threadStateDestroyCallback, nullptr)) {
             freeNode(dummy);
             self->valid = false;
             return newSelf;
@@ -309,7 +324,7 @@ namespace Catelier::src::foundation::concurrent {
             return nullptr;
         }
 
-        auto* const state = (ConcurrentUnboundedQueueThreadState*) concurrency::ThreadLocal_getOrCreate(&self->threadState);
+        auto* const state = (ConcurrentUnboundedQueueThreadState*) concurrency::ThreadLocalTable_getOrCreate(&self->threadState);
         if (!state) {
             return nullptr;
         }
@@ -344,7 +359,7 @@ namespace Catelier::src::foundation::concurrent {
 
                         if (state->retiredCount >= RETIRE_THRESHOLD) {
                             bool allIdle = true;
-                            concurrency::ThreadLocal_forEach(&self->threadState, scanCallback, &allIdle);
+                            concurrency::ThreadLocalTable_forEach(&self->threadState, scanCallback, &allIdle);
 
                             if (allIdle) {
                                 ConcurrentUnboundedQueueNode* retired = state->retiredHead;

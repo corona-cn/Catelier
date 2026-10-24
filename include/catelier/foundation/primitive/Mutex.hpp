@@ -12,7 +12,6 @@ namespace Catelier::include::foundation::primitive {
                             this->mutex->unlock();
                         }
                     }
-
                     Guard(const Guard&) = delete;
                     Guard(Guard&& other) noexcept : mutex(other.mutex), owns(other.owns) {
                         other.mutex = nullptr;
@@ -61,7 +60,6 @@ namespace Catelier::include::foundation::primitive {
                             this->mutex->unlock();
                         }
                     }
-
                     TryGuard(const TryGuard&) = delete;
                     TryGuard(TryGuard&& other) noexcept : mutex(other.mutex), owns(other.owns) {
                         other.mutex = nullptr;
@@ -102,6 +100,10 @@ namespace Catelier::include::foundation::primitive {
                     bool owns;
             };
 
+            auto isValid() const -> bool {
+                return this->handle.valid;
+            }
+
             explicit Mutex() {
                 src::foundation::primitive::Mutex_init(&this->handle);
             }
@@ -110,7 +112,6 @@ namespace Catelier::include::foundation::primitive {
                     src::foundation::primitive::Mutex_destroy(&this->handle);
                 }
             }
-
             Mutex(const Mutex&) = delete;
             Mutex(Mutex&& other) noexcept {
                 this->handle = other.handle;
@@ -140,10 +141,6 @@ namespace Catelier::include::foundation::primitive {
             }
             auto tryLock() -> bool {
                 return src::foundation::primitive::Mutex_tryLock(&this->handle);
-            }
-
-            auto isValid() const -> bool {
-                return this->handle.valid;
             }
 
             auto rawHandle() -> src::foundation::primitive::Mutex* {

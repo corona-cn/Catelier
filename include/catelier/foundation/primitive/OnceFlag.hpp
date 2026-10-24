@@ -4,6 +4,10 @@
 namespace Catelier::include::foundation::primitive {
     class OnceFlag {
         public:
+            auto isValid() const -> bool {
+                return this->handle.valid;
+            }
+
             explicit OnceFlag() {
                 src::foundation::primitive::OnceFlag_init(&this->handle);
             }
@@ -12,7 +16,6 @@ namespace Catelier::include::foundation::primitive {
                     src::foundation::primitive::OnceFlag_destroy(&this->handle);
                 }
             }
-
             OnceFlag(const OnceFlag&) = delete;
             OnceFlag(OnceFlag&& other) noexcept {
                 this->handle = other.handle;
@@ -36,10 +39,6 @@ namespace Catelier::include::foundation::primitive {
 
             auto run(void (*callback)()) -> bool {
                 return src::foundation::primitive::OnceFlag_do(&this->handle, callback);
-            }
-
-            auto isValid() const -> bool {
-                return this->handle.valid;
             }
 
         private:

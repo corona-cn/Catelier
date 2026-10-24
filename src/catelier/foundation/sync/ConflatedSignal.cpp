@@ -31,14 +31,13 @@ namespace Catelier::src::foundation::sync {
     }
 
     auto ConflatedSignal_init(ConflatedSignal* self) -> bool {
-        if (!self || self->valid) {
+        if (!self || primitive::AtomicBool_load(&self->valid, primitive::ACQUIRE)) {
             return false;
         }
 
-        self->valid = false;
-        self->pending = false;
-        self->closed = false;
-        self->waiterCount = 0;
+        primitive::AtomicBool_store(&self->pending, false, primitive::RELAXED);
+        primitive::AtomicBool_store(&self->closed, false, primitive::RELAXED);
+        primitive::Atomic64_store(&self->waiterCount, 0, primitive::RELAXED);
 
         if (!primitive::Mutex_init(&self->mutex)) {
             return false;
@@ -49,95 +48,132 @@ namespace Catelier::src::foundation::sync {
             return false;
         }
 
-        self->valid = true;
+        primitive::AtomicBool_store(&self->valid, true, primitive::RELEASE);
 
         return true;
     }
     auto ConflatedSignal_destroy(ConflatedSignal* self) -> bool {
-        if (!self || !self->valid) {
+        if (!self) {
             return false;
         }
 
-        self->valid = false;
+        bool expected = true;
+        if (!primitive::AtomicBool_compareExchange(&self->valid, &expected, false, primitive::SEQUENTIAL_CONSISTENT)) {
+            return false;
+        }
 
         primitive::Mutex_lock(&self->mutex);
-        self->closed = true;
+
+        primitive::AtomicBool_store(&self->closed, true, primitive::RELEASE);
         ConditionalVar_broadcast(&self->condition);
+
         primitive::Mutex_unlock(&self->mutex);
 
-        while (primitive::Atomic64_load(&self->waiterCount, primitive::ACQUIRE) > 0) {
+        while (primitive::Atomic64_load(&self->waiterCount, primitive::SEQUENTIAL_CONSISTENT) > 0) {
             primitive::Thread_yield();
         }
 
         ConditionalVar_destroy(&self->condition);
+
         primitive::Mutex_destroy(&self->mutex);
 
         return true;
     }
 
     auto ConflatedSignal_signal(ConflatedSignal* self) -> void {
-        if (!self || !self->valid) {
+        if (!self) {
+            return;
+        }
+
+        primitive::Atomic64_fetchAdd(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
+        if (!primitive::AtomicBool_load(&self->valid, primitive::ACQUIRE)) {
+            primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
             return;
         }
 
         primitive::Mutex_lock(&self->mutex);
 
-        if (!self->closed && !self->pending) {
-            self->pending = true;
+        if (!primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE) && !primitive::AtomicBool_load(&self->pending, primitive::ACQUIRE)) {
+            primitive::AtomicBool_store(&self->pending, true, primitive::RELEASE);
             ConditionalVar_signal(&self->condition);
         }
 
         primitive::Mutex_unlock(&self->mutex);
+
+        primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
     }
+
     auto ConflatedSignal_wait(ConflatedSignal* self) -> void {
-        if (!self || !self->valid) {
+        if (!self) {
+            return;
+        }
+        primitive::Atomic64_fetchAdd(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
+        if (!primitive::AtomicBool_load(&self->valid, primitive::ACQUIRE)) {
+            primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
             return;
         }
 
         primitive::Mutex_lock(&self->mutex);
 
-        primitive::Atomic64_fetchAdd(&self->waiterCount, 1, primitive::RELAXED);
+        if (primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
+            primitive::Mutex_unlock(&self->mutex);
+            primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
+            return;
+        }
 
-        while (!self->pending && !self->closed) {
+        while (!primitive::AtomicBool_load(&self->pending, primitive::ACQUIRE) && !primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
             ConditionalVar_wait(&self->condition, &self->mutex);
+        }
+
+        if (!primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
+            primitive::AtomicBool_store(&self->pending, false, primitive::RELEASE);
         }
 
         primitive::Mutex_unlock(&self->mutex);
 
-        primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::RELEASE);
+        primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
     }
     auto ConflatedSignal_timedWait(ConflatedSignal* self, const u64 timeoutMs) -> bool {
-        if (!self || !self->valid) {
+        if (!self) {
+            return false;
+        }
+
+        primitive::Atomic64_fetchAdd(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
+        if (!primitive::AtomicBool_load(&self->valid, primitive::ACQUIRE)) {
+            primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
             return false;
         }
 
         primitive::Mutex_lock(&self->mutex);
 
-        primitive::Atomic64_fetchAdd(&self->waiterCount, 1, primitive::RELAXED);
+        if (primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
+            primitive::Mutex_unlock(&self->mutex);
+            primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
+            return false;
+        }
 
         bool result = true;
-        const u64 deadline = currentTimeMs() + timeoutMs;
 
-        while (!self->pending && !self->closed) {
+        const u64 deadline = currentTimeMs() + timeoutMs;
+        while (!primitive::AtomicBool_load(&self->pending, primitive::ACQUIRE) && !primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
             const u64 now = currentTimeMs();
             if (now >= deadline) {
                 result = false;
                 break;
             }
 
-            const u64 remaining = deadline - now;
-            ConditionalVar_timedWait(&self->condition, &self->mutex, remaining);
+            ConditionalVar_timedWait(&self->condition, &self->mutex, deadline - now);
         }
 
-        if (self->closed) {
+        if (primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
             result = false;
         } else if (result) {
-            self->pending = false;
+            primitive::AtomicBool_store(&self->pending, false, primitive::RELEASE);
         }
 
         primitive::Mutex_unlock(&self->mutex);
 
-        primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::RELEASE);
+        primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
 
         return result;
     }
