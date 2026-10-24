@@ -45,8 +45,8 @@ namespace Catelier::include::architecture::imp {
                 return this->handle != nullptr;
             }
 
-            explicit IMPList(const usize inChunkSize = 1024, const u64 inPropagationDurationMs = 1, bool (*inElementEquals)(const void*, const void*) = nullptr) {
-                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inChunkSize, inPropagationDurationMs, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr, inElementEquals);
+            explicit IMPList(const usize inChunkSize = 1024, bool (*inElementEquals)(const void*, const void*) = nullptr) {
+                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inChunkSize, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr, inElementEquals);
             }
             ~IMPList() {
                 if (this->handle) {
@@ -96,6 +96,15 @@ namespace Catelier::include::architecture::imp {
                 return *this;
             }
 
+            auto configurePropagation(const u64 inPropagationDelayMs) -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_configurePropagation(this->handle, inPropagationDelayMs);
+            }
             auto configureRetirement(const usize inRetiredPresentElementsCapacity) -> bool {
                 assert(this->handle != nullptr);
 
@@ -455,14 +464,14 @@ namespace Catelier::include::architecture::imp {
                 return src::architecture::imp::IMPList_sort(this->handle, src::architecture::imp::IMPList_ElementSortingStrategy::DESCENDING, naturalBridge);
             }
 
-            auto merge() -> bool {
+            auto tryMerging() -> bool {
                 assert(this->handle != nullptr);
 
                 if (!this->handle) {
                     return false;
                 }
 
-                return src::architecture::imp::IMPList_merge(this->handle);
+                return src::architecture::imp::IMPList_tryMerging(this->handle);
             }
             auto awaitMerging() -> bool {
                 assert(this->handle != nullptr);

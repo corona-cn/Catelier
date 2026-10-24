@@ -91,12 +91,14 @@ namespace Catelier::src::foundation::concurrency {
                 while (entry) {
                     ThreadLocalTableEntry* const next = entry->nextInBucket;
 
-                    if (entry->owner == nullptr) {
+                    ThreadLocalTable* const entryOwner = (ThreadLocalTable*) primitive::AtomicPtr_load((void* const*) &entry->owner, primitive::MemoryOrder::RELAXED);
+
+                    if (entryOwner == nullptr) {
                         entry->nextInBucket = zombies;
                         zombies = entry;
                         zombieCount++;
                     } else {
-                        const usize newIndex = hash(entry->owner->generation) & (newBucketCount - 1);
+                        const usize newIndex = hash(entryOwner->generation) & (newBucketCount - 1);
                         entry->nextInBucket = newBuckets[newIndex];
                         newBuckets[newIndex] = entry;
                     }
@@ -319,7 +321,7 @@ namespace Catelier::src::foundation::concurrency {
             if (entry->isThreadExited) {
                 free(entry);
             } else {
-                entry->owner = nullptr;
+                primitive::AtomicPtr_store((void**) &entry->owner, nullptr, primitive::MemoryOrder::RELEASE);
             }
 
             entry = next;
@@ -374,7 +376,7 @@ namespace Catelier::src::foundation::concurrency {
         primitive::Mutex_lock(&lifetimeLock);
 
         for (ThreadLocalTableEntry* entry = self->headEntry; entry; entry = entry->nextInOwner) {
-            entry->owner = self;
+            primitive::AtomicPtr_store((void**) &entry->owner, (void*) self, primitive::MemoryOrder::RELEASE);
         }
 
         primitive::Mutex_unlock(&lifetimeLock);
@@ -419,7 +421,7 @@ namespace Catelier::src::foundation::concurrency {
         const usize bucketIndex = hash(self->generation) & (registry->bucketCount - 1);
         const ThreadLocalTableEntry* entry = registry->buckets[bucketIndex];
         while (entry) {
-            if (entry->owner == self) {
+            if ((const ThreadLocalTable*) primitive::AtomicPtr_load((void* const*) &entry->owner, primitive::MemoryOrder::RELAXED) == self) {
                 return entry->value;
             }
 
@@ -471,8 +473,9 @@ namespace Catelier::src::foundation::concurrency {
         ThreadLocalTableEntry** link = &registry->buckets[bucketIndex];
         while (*link) {
             ThreadLocalTableEntry* const entry = *link;
+            ThreadLocalTable* const currentOwner = (ThreadLocalTable*) primitive::AtomicPtr_load((void* const*) &entry->owner, primitive::MemoryOrder::RELAXED);
 
-            if (entry->owner == self) {
+            if (currentOwner == self) {
                 registry->cachedOwner = self;
                 registry->cachedGeneration = self->generation;
                 registry->cachedValue = entry->value;
@@ -480,7 +483,7 @@ namespace Catelier::src::foundation::concurrency {
                 return entry->value;
             }
 
-            if (entry->owner == nullptr) {
+            if (currentOwner == nullptr) {
                 primitive::Mutex_lock(&lifetimeLock);
 
                 ThreadLocalTableEntry** current = &registry->buckets[bucketIndex];

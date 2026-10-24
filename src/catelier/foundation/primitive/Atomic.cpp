@@ -19,7 +19,9 @@ namespace Catelier::src::foundation::primitive {
 
         auto applyLoadBarrier(const MemoryOrder memoryOrder) -> void {
             switch (memoryOrder) {
-                case RELAXED: break;
+                case RELAXED: {
+                    break;
+                }
                 case ACQUIRE: {
                     #ifdef STRONG_MEMORY_MODEL
 
@@ -60,15 +62,7 @@ namespace Catelier::src::foundation::primitive {
                     break;
                 }
                 case SEQUENTIAL_CONSISTENT: {
-                    #ifdef STRONG_MEMORY_MODEL
-
-                    _ReadBarrier();
-
-                    #else
-
                     _mm_mfence();
-
-                    #endif
 
                     break;
                 }
@@ -76,7 +70,9 @@ namespace Catelier::src::foundation::primitive {
         }
         auto applyStoreBarrier(const MemoryOrder memoryOrder) -> void {
             switch (memoryOrder) {
-                case RELAXED: break;
+                case RELAXED: {
+                    break;
+                }
                 case ACQUIRE: {
                     #ifdef STRONG_MEMORY_MODEL
 
@@ -117,15 +113,7 @@ namespace Catelier::src::foundation::primitive {
                     break;
                 }
                 case SEQUENTIAL_CONSISTENT: {
-                    #ifdef STRONG_MEMORY_MODEL
-
-                    _WriteBarrier();
-
-                    #else
-
                     _mm_mfence();
-
-                    #endif
 
                     break;
                 }

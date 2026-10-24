@@ -10,10 +10,11 @@ namespace Catelier::src::architecture::imp {
         DESCENDING,
     } IMPList_ElementSortingStrategy;
 
-    auto IMPList_construct(usize inElementSize, usize inChunkSize, u64 inPropagationDurationMs, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList*;
+    auto IMPList_construct(usize inElementSize, usize inChunkSize, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList*;
     auto IMPList_destruct(IMPList* self) -> bool;
     auto IMPList_copy(const IMPList* self) -> IMPList*;
 
+    auto IMPList_configurePropagation(IMPList* self, u64 inPropagationDelayMs) -> bool;
     auto IMPList_configureRetirement(IMPList* self, usize inRetiredPresentElementsCapacity) -> bool;
 
     auto IMPList_presentElementsSpan(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
@@ -48,7 +49,7 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_sort(IMPList* self, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)) -> bool;
 
-    auto IMPList_merge(IMPList* self) -> bool;
+    auto IMPList_tryMerging(IMPList* self) -> bool;
     auto IMPList_awaitMerging(IMPList* self) -> bool;
     auto IMPList_timedAwaitMerging(IMPList* self, u64 inTimeoutMs) -> bool;
 }

@@ -11,8 +11,12 @@
 
 namespace Catelier::test::architecture::imp {
     namespace {
+        using namespace Catelier::include::architecture::imp;
+
         constexpr u32 BENCH_TRIALS = 51;
         constexpr u32 BENCH_TRIM = 5;
+        constexpr u64 kWarmupNs = 200000000ULL;
+        constexpr u64 kMeasureNs = 800000000ULL;
 
         auto intEquals(const void* a, const void* b) -> bool {
             return *((const int*) a) == *((const int*) b);
@@ -98,18 +102,98 @@ namespace Catelier::test::architecture::imp {
             LOG(label, "：", nsPerOp, " ns/op（", opsPerSec / 1e6, " M op/s），标准差 ", sdNs, " ns，总 ", totalOps, " 次");
         }
 
-        auto logConcurrentMetrics(const int threads, const int readers, const int writers, const double readNs, const double writeNs) -> void {
-            if (readers > 0 && writers > 0) {
-                const double rOps = readNs > 0.0 ? 1e9 / readNs : 0.0;
-                const double wOps = writeNs > 0.0 ? 1e9 / writeNs : 0.0;
-                LOG(threads, " 线程（", readers, " 读 ", writers, " 写）：读 ", readNs, " ns/op（", rOps / 1e6, " M op/s），写 ", writeNs, " ns/op（", wOps / 1e6, " M op/s）");
-            } else if (readers > 0) {
-                const double rOps = readNs > 0.0 ? 1e9 / readNs : 0.0;
-                LOG(threads, " 线程（纯读）：读 ", readNs, " ns/op（", rOps / 1e6, " M op/s）");
-            } else if (writers > 0) {
-                const double wOps = writeNs > 0.0 ? 1e9 / writeNs : 0.0;
-                LOG(threads, " 线程（纯写）：写 ", writeNs, " ns/op（", wOps / 1e6, " M op/s）");
+        auto logConcurrentMetrics(const int threads, const int readers, const int writers, const u64 totalROps, const u64 totalRElapsedNs, const u64 totalWOps, const u64 totalWElapsedNs) -> void {
+            double rOpsPerSec = 0.0;
+            double wOpsPerSec = 0.0;
+
+            if (readers > 0 && totalRElapsedNs > 0) {
+                rOpsPerSec = (double) totalROps / ((double) totalRElapsedNs / 1e9);
             }
+            if (writers > 0 && totalWElapsedNs > 0) {
+                wOpsPerSec = (double) totalWOps / ((double) totalWElapsedNs / 1e9);
+            }
+
+            const double rNs = rOpsPerSec > 0.0 ? 1e9 / rOpsPerSec : 0.0;
+            const double wNs = wOpsPerSec > 0.0 ? 1e9 / wOpsPerSec : 0.0;
+
+            if (readers > 0 && writers > 0) {
+                LOG(threads, " 线程（", readers, " 读 ", writers, " 写）：读 ", rOpsPerSec / 1e6, " M op/s（", rNs, " ns/op），写 ", wOpsPerSec / 1e6, " M op/s（", wNs, " ns/op）");
+            } else if (readers > 0) {
+                LOG(threads, " 线程（纯读）：读 ", rOpsPerSec / 1e6, " M op/s（", rNs, " ns/op）");
+            } else if (writers > 0) {
+                LOG(threads, " 线程（纯写）：写 ", wOpsPerSec / 1e6, " M op/s（", wNs, " ns/op）");
+            }
+        }
+
+        struct ConcurrentTaskResult {
+            u64 ops;
+            u64 elapsedNs;
+        };
+
+        auto runConcurrentTask(IMPList<int>& list, const bool isReader, const u64 threadId, const u64 runNs, const u64 warmupNs) -> ConcurrentTaskResult {
+            QpcTimer timer;
+            u64 localOps = 0;
+            volatile int accum = 0;
+            int counter = (int) (threadId * 100000000);
+
+            timer.start();
+            while (true) {
+                if (isReader) {
+                    const usize count = list.presentElementCount();
+                    if (count > 0) {
+                        for (int k = 0; k < 100; ++k) {
+                            const int* v = list.get((usize) ((localOps + k) % count));
+                            if (v) {
+                                accum += *v;
+                            }
+                        }
+                        localOps += 100;
+                    }
+                } else {
+                    for (int k = 0; k < 100; ++k) {
+                        list.add(counter++);
+                    }
+                    localOps += 100;
+                }
+
+                if (localOps > 0 && (localOps & 4095) == 0) {
+                    if (timer.stopNs() >= warmupNs) {
+                        break;
+                    }
+                }
+            }
+
+            localOps = 0;
+            timer.start();
+            while (true) {
+                if (isReader) {
+                    const usize count = list.presentElementCount();
+                    if (count > 0) {
+                        for (int k = 0; k < 100; ++k) {
+                            const int* v = list.get((usize) ((localOps + k) % count));
+                            if (v) {
+                                accum += *v;
+                            }
+                        }
+                        localOps += 100;
+                    }
+                } else {
+                    for (int k = 0; k < 100; ++k) {
+                        list.add(counter++);
+                    }
+                    localOps += 100;
+                }
+
+                if (localOps > 0 && (localOps & 4095) == 0) {
+                    if (timer.stopNs() >= runNs) {
+                        break;
+                    }
+                }
+            }
+
+            u64 elapsedNs = timer.stopNs();
+
+            return { localOps, elapsedNs };
         }
     }
 
@@ -120,7 +204,8 @@ namespace Catelier::test::architecture::imp {
         LOGGER_INDENT_BLOCK(true) {
             LOG("--- [正确性] 构造与生命周期 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(64, 1000, intEquals);
+                auto list = IMPList<int>(64, intEquals);
+                list.configurePropagation(1);
                 LOG("初始 isValid = ", list.isValid() ? "PASS" : "FAIL", "（应为 PASS）");
                 LOG("初始 isEmpty = ", list.isEmpty(), "（应为 1）");
                 LOG("初始 presentElementCount = ", list.presentElementCount(), "（应为 0）");
@@ -131,20 +216,23 @@ namespace Catelier::test::architecture::imp {
 
                 constexpr usize kInstances = 1000;
                 for (usize i = 0; i < kInstances; ++i) {
-                    auto temp = IMPList<int>(64, 1000, intEquals);
+                    auto temp = IMPList<int>(64, intEquals);
+                    temp.configurePropagation(1);
                     temp.add((int) i);
-                    temp.merge();
+                    temp.tryMerging();
                 }
                 LOG(kInstances, " 个实例循环构造析构：PASS");
             }
 
             LOG("--- [正确性] 单线程 add / addAll 全路径 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(64, 1000, intEquals);
+                auto list = IMPList<int>(64, intEquals);
+                list.configurePropagation(1);
                 for (int i = 0; i < 1000; ++i) {
                     list.add(i);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
 
                 bool contentOk = true;
                 for (int i = 0; i < 1000; ++i) {
@@ -160,14 +248,18 @@ namespace Catelier::test::architecture::imp {
                 for (int i = 0; i < 256; ++i) {
                     batch[i] = i + 1000;
                 }
-                auto list2 = IMPList<int>(64, 1000, intEquals);
+                auto list2 = IMPList<int>(64, intEquals);
+                list2.configurePropagation(1);
                 list2.addAll(batch, 256);
-                list2.merge();
+                list2.tryMerging();
+                list2.awaitMerging();
                 LOG("addAll 256 个元素 → presentElementCount = ", list2.presentElementCount(), "（应为 256）");
 
-                auto list3 = IMPList<int>(64, 1000, intEquals);
+                auto list3 = IMPList<int>(64, intEquals);
+                list3.configurePropagation(1);
                 list3.addAll(batch, 0);
-                list3.merge();
+                list3.tryMerging();
+                list3.awaitMerging();
                 LOG("addAll 0 个元素 → presentElementCount = ", list3.presentElementCount(), "（应为 0）");
             }
 
@@ -176,11 +268,13 @@ namespace Catelier::test::architecture::imp {
                 const usize cs[] = { 16, 63, 64, 65, 127, 128, 129 };
 
                 for (usize c : cs) {
-                    auto list = IMPList<int>(c, 1000, intEquals);
+                    auto list = IMPList<int>(c, intEquals);
+                    list.configurePropagation(1);
                     for (usize i = 0; i < c; ++i) {
                         list.add((int) i);
                     }
-                    list.merge();
+                    list.tryMerging();
+                    list.awaitMerging();
                     bool ok = list.presentElementCount() == c;
                     for (usize i = 0; ok && i < c; ++i) {
                         const int* v = list.get(i);
@@ -194,32 +288,38 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [正确性] remove / removeAll 边界 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(16, 1000, intEquals);
+                auto list = IMPList<int>(16, intEquals);
+                list.configurePropagation(1);
                 for (int i = 0; i < 100; ++i) {
                     list.add(i % 10);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
                 LOG("add 100 个（0-9 各 10 次） → presentElementCount = ", list.presentElementCount(), "（应为 100）");
 
                 const bool removed = list.remove(5);
                 LOG("remove(5) = ", removed ? "PASS" : "FAIL", "（应为 PASS）");
 
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
                 const usize afterRemove = list.presentElementCount();
                 LOG("merge 后 presentElementCount = ", afterRemove, "（全量删除语义：所有 5 均被移除，应为 90）");
             }
 
             LOG("--- [正确性] removeIf / retainIf 语义 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(16, 1000, intEquals);
+                auto list = IMPList<int>(16, intEquals);
+                list.configurePropagation(1);
                 for (int i = 1; i <= 100; ++i) {
                     list.add(i);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
 
                 const bool removed = list.removeIf(intEvenPredicate);
                 LOG("removeIf(偶数) = ", removed ? "PASS" : "FAIL");
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
 
                 bool allOdd = true;
                 for (usize i = 0; i < list.presentElementCount(); ++i) {
@@ -230,57 +330,69 @@ namespace Catelier::test::architecture::imp {
                 }
                 LOG("removeIf 后全为奇数：", allOdd ? "PASS" : "FAIL", "（count = ", list.presentElementCount(), "，应为 50）");
 
-                auto list2 = IMPList<int>(16, 1000, intEquals);
+                auto list2 = IMPList<int>(16, intEquals);
+                list2.configurePropagation(1);
                 for (int i = 1; i <= 100; ++i) {
                     list2.add(i);
                 }
-                list2.merge();
+                list2.tryMerging();
+                list2.awaitMerging();
 
                 const bool retained = list2.removeExceptIf(intOddPredicate);
                 LOG("retainIf(奇数) = ", retained ? "PASS" : "FAIL");
-                list2.merge();
+                list2.tryMerging();
+                list2.awaitMerging();
                 LOG("retainIf 后 presentElementCount = ", list2.presentElementCount(), "（应为 50）");
             }
 
             LOG("--- [正确性] clear 语义（TOMBSTONE + merge） ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(64, 1000, intEquals);
+                auto list = IMPList<int>(64, intEquals);
+                list.configurePropagation(1);
                 for (int i = 0; i < 20; ++i) {
                     list.add(i);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
                 LOG("clear 前 present = ", list.presentElementCount(), "（应为 20）");
 
                 list.removeAll();
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
                 LOG("clear 后 present = ", list.presentElementCount(), "（应为 0）");
                 LOG("clear 后 isEmpty = ", list.isEmpty() ? "PASS" : "FAIL");
 
                 list.add(100);
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
                 LOG("clear 后再 add：present = ", list.presentElementCount(), "（应为 1）");
                 LOG("值正确：", *((const int*) list.get(0)) == 100 ? "PASS" : "FAIL");
 
-                auto list2 = IMPList<int>(64, 1000, intEquals);
+                auto list2 = IMPList<int>(64, intEquals);
+                list2.configurePropagation(1);
                 list2.removeAll();
-                list2.merge();
+                list2.tryMerging();
+                list2.awaitMerging();
                 LOG("空列表 clear → present = ", list2.presentElementCount(), "（应为 0）");
             }
 
             LOG("--- [正确性] copy / move 深度语义 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto original = IMPList<int>(16, 1000, intEquals);
+                auto original = IMPList<int>(16, intEquals);
+                original.configurePropagation(1);
                 for (int i = 0; i < 200; ++i) {
                     original.add(i * 3);
                 }
-                original.merge();
+                original.tryMerging();
+                original.awaitMerging();
 
                 auto copied = original;
                 LOG("copy 后 original.present = ", original.presentElementCount(), "，copied.present = ", copied.presentElementCount(), "（应均为 200）");
                 LOG("copy 后 original.isValid = ", original.isValid() ? "PASS" : "FAIL", "，copied.isValid = ", copied.isValid() ? "PASS" : "FAIL", "（应均为 PASS）");
 
                 copied.add(999);
-                copied.merge();
+                copied.tryMerging();
+                copied.awaitMerging();
                 LOG("copied 加 1 个 → original.present = ", original.presentElementCount(), "（应为 200）");
                 LOG("copied.present = ", copied.presentElementCount(), "（应为 201）");
 
@@ -293,11 +405,13 @@ namespace Catelier::test::architecture::imp {
                 }
                 LOG("original 内容未变：", origIntact ? "PASS" : "FAIL");
 
-                auto source = IMPList<int>(64, 1000, intEquals);
+                auto source = IMPList<int>(64, intEquals);
+                source.configurePropagation(1);
                 for (int i = 0; i < 100; ++i) {
                     source.add(i);
                 }
-                source.merge();
+                source.tryMerging();
+                source.awaitMerging();
 
                 LOG("move 构造前 source.isValid = ", source.isValid() ? "PASS" : "FAIL", "（应为 PASS）");
                 LOG("move 构造前 source.present = ", source.presentElementCount(), "（应为 100）");
@@ -316,9 +430,11 @@ namespace Catelier::test::architecture::imp {
                 }
                 LOG("moved 内容完整：", movedContentOk ? "PASS" : "FAIL");
 
-                auto target = IMPList<int>(64, 1000, intEquals);
+                auto target = IMPList<int>(64, intEquals);
+                target.configurePropagation(1);
                 target.add(999);
-                target.merge();
+                target.tryMerging();
+                target.awaitMerging();
                 LOG("move 赋值前 target.isValid = ", target.isValid() ? "PASS" : "FAIL", "（应为 PASS）");
                 LOG("move 赋值前 target.present = ", target.presentElementCount(), "（应为 1）");
 
@@ -336,9 +452,11 @@ namespace Catelier::test::architecture::imp {
                 }
                 LOG("target 内容完整（覆盖了旧内容）：", targetContentOk ? "PASS" : "FAIL");
 
-                auto self = IMPList<int>(64, 1000, intEquals);
+                auto self = IMPList<int>(64, intEquals);
+                self.configurePropagation(1);
                 self.add(42);
-                self.merge();
+                self.tryMerging();
+                self.awaitMerging();
                 auto& selfRef = self;
                 self = std::move(selfRef);
                 LOG("自移动赋值后 self.isValid = ", self.isValid() ? "PASS" : "FAIL", "（应为 PASS，自赋值被保护）");
@@ -347,12 +465,13 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [正确性] 排序策略 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(16, 1000, intEquals);
+                auto list = IMPList<int>(16, intEquals);
+                list.configurePropagation(1);
                 const int values[] = { 5, 2, 8, 1, 9, 3, 7, 4, 6, 0 };
                 for (int v : values) {
                     list.add(v);
                 }
-                list.merge();
+                list.awaitMerging();
                 list.naturalSort();
 
                 bool asc = true;
@@ -364,11 +483,12 @@ namespace Catelier::test::architecture::imp {
                 }
                 LOG("naturalSort → 升序：", asc ? "PASS" : "FAIL");
 
-                auto list2 = IMPList<int>(16, 1000, intEquals);
+                auto list2 = IMPList<int>(16, intEquals);
+                list2.configurePropagation(1);
                 for (int v : values) {
                     list2.add(v);
                 }
-                list2.merge();
+                list2.awaitMerging();
                 list2.naturalSortDescending();
 
                 bool desc = true;
@@ -383,7 +503,8 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [正确性] awaitMerging 语义 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(1024, 1000, intEquals);
+                auto list = IMPList<int>(1024, intEquals);
+                list.configurePropagation(1);
                 for (int i = 0; i < 100; ++i) {
                     list.add(i);
                 }
@@ -396,7 +517,8 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [并发] 4 写线程 × 10000 元素：计数 + 完整性 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(256, 1, intEquals);
+                auto list = IMPList<int>(256, intEquals);
+                list.configurePropagation(1);
                 constexpr int kThreadCount = 4;
                 constexpr int kElementsPerThread = 10000;
 
@@ -440,7 +562,8 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [并发] 线程退出（写线程 join 触发 threadExitCallback） ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(64, 1, intEquals);
+                auto list = IMPList<int>(64, intEquals);
+                list.configurePropagation(1);
 
                 for (int round = 0; round < 100; ++round) {
                     std::thread t([&list, round]() {
@@ -461,14 +584,15 @@ namespace Catelier::test::architecture::imp {
             LOGGER_INDENT_BLOCK(true) {
                 constexpr u32 kRounds = 200;
                 for (u32 r = 0; r < kRounds; ++r) {
-                    auto list = IMPList<int>(128, 1, intEquals);
+                    auto list = IMPList<int>(128, intEquals);
+                    list.configurePropagation(1);
                     for (int i = 0; i < 500; ++i) {
                         list.add(i);
                     }
-                    list.merge();
+                    list.tryMerging();
                     auto copy = list;
                     copy.add(999);
-                    copy.merge();
+                    copy.tryMerging();
                 }
                 LOG(kRounds, " 轮构造/拷贝/析构：PASS（无崩溃即无灾难性泄漏）");
             }
@@ -480,7 +604,8 @@ namespace Catelier::test::architecture::imp {
                 QpcTimer timer;
 
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<int>(16384, 100000, intEquals);
+                    auto list = IMPList<int>(16384, intEquals);
+                    list.configurePropagation(1);
                     timer.start();
                     for (u32 i = 0; i < kBatch; ++i) {
                         list.add((int) i);
@@ -503,12 +628,14 @@ namespace Catelier::test::architecture::imp {
                     QpcTimer timer;
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 100000, intEquals);
+                        auto list = IMPList<int>(1024, intEquals);
+                        list.configurePropagation(1);
                         timer.start();
                         for (u32 i = 0; i < n; ++i) {
                             list.add((int) i);
                         }
-                        list.merge();
+                        list.tryMerging();
+                        list.awaitMerging();
                         samples[t] = timer.stopNs() * 100 / n;
                     }
 
@@ -521,11 +648,13 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [性能] get 快照访问延迟 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(1024, 100000, intEquals);
+                auto list = IMPList<int>(1024, intEquals);
+                list.configurePropagation(1);
                 for (int i = 0; i < 100000; ++i) {
                     list.add(i);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
 
                 static u64 samples[BENCH_TRIALS];
                 constexpr u32 kIters = 20000000;
@@ -552,11 +681,13 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [性能] contains 扫描延迟（命中/未命中） ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(1024, 100000, intEquals);
+                auto list = IMPList<int>(1024, intEquals);
+                list.configurePropagation(1);
                 for (int i = 0; i < 1000; ++i) {
                     list.add(i);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
 
                 static u64 hitSamples[BENCH_TRIALS];
                 static u64 missSamples[BENCH_TRIALS];
@@ -607,7 +738,8 @@ namespace Catelier::test::architecture::imp {
                     QpcTimer timer;
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 100000, intEquals);
+                        auto list = IMPList<int>(1024, intEquals);
+                        list.configurePropagation(1);
 
                         std::vector<std::thread> threads;
                         timer.start();
@@ -621,7 +753,8 @@ namespace Catelier::test::architecture::imp {
                         for (auto& thread : threads) {
                             thread.join();
                         }
-                        list.merge();
+                        list.tryMerging();
+                        list.awaitMerging();
                         samples[t] = timer.stopNs() * 100 / total;
                     }
 
@@ -632,7 +765,7 @@ namespace Catelier::test::architecture::imp {
                 }
             }
 
-            LOG("--- [性能] 高并发读写延迟（分线程数与读写比例） ---");
+            LOG("--- [性能] 高并发读写吞吐（分线程数与读写比例） ---");
             LOGGER_INDENT_BLOCK(true) {
                 constexpr int threadConfigs[] = {
                     1, 2, 4, 8
@@ -642,14 +775,12 @@ namespace Catelier::test::architecture::imp {
                     int writers;
                 };
                 const ReadWriteRatio ratios[] = {
-                    { 1, 1 }, // 1读1写
-                    { 1, 4 }, // 写密集 (1:4)
-                    { 4, 1 }, // 读密集 (4:1)
-                    { 1, 0 }, // 纯读
-                    { 0, 1 }  // 纯写
+                    { 1, 1 },
+                    { 1, 4 },
+                    { 4, 1 },
+                    { 1, 0 },
+                    { 0, 1 }
                 };
-
-                QpcTimer timer;
 
                 for (int baseThreads : threadConfigs) {
                     for (const auto& ratio : ratios) {
@@ -661,81 +792,54 @@ namespace Catelier::test::architecture::imp {
                             continue;
                         }
 
-                        auto list = IMPList<int>(1024, 1, intEquals);
+                        auto list = IMPList<int>(1024, intEquals);
+                        list.configurePropagation(1);
                         list.configureRetirement(4096);
                         for (int i = 0; i < 10000; ++i) {
                             list.add(i);
                         }
-                        list.merge();
-
-                        std::atomic<bool> running = { true };
-
-                        std::atomic<u64> totalReads = { 0 };
-                        std::atomic<u64> totalWrites = { 0 };
-                        std::atomic<u64> readTimeNs = { 0 };
-                        std::atomic<u64> writeTimeNs = { 0 };
+                        list.tryMerging();
+                        list.awaitMerging();
 
                         std::vector<std::thread> threads;
+                        threads.reserve(totalThreads);
+                        std::vector<ConcurrentTaskResult> results(totalThreads);
 
                         for (int r = 0; r < rThreads; ++r) {
-                            threads.emplace_back([&list, &running, &totalReads, &readTimeNs]() {
-                                u64 localReads = 0;
-                                volatile int accum = 0;
-
-                                QpcTimer localTimer;
-                                localTimer.start();
-
-                                while (running.load(std::memory_order_relaxed)) {
-                                    const usize count = list.presentElementCount();
-                                    if (count > 0) {
-                                        for (int k = 0; k < 100; ++k) {
-                                            const int* v = list.get((usize) ((localReads + k) % count));
-                                            if (v) {
-                                                accum += *v;
-                                            }
-                                        }
-                                        localReads += 100;
-                                    }
-                                }
-
-                                u64 elapsed = localTimer.stopNs();
-                                totalReads.fetch_add(localReads, std::memory_order_relaxed);
-                                readTimeNs.fetch_add(elapsed, std::memory_order_relaxed);
+                            threads.emplace_back([&list, &results, r]() {
+                                results[r] = runConcurrentTask(list, true, r, kMeasureNs, kWarmupNs);
                             });
                         }
 
                         for (int w = 0; w < wThreads; ++w) {
-                            threads.emplace_back([&list, &running, &totalWrites, &writeTimeNs, w]() {
-                                u64 localWrites = 0;
-                                int counter = w * 100000000;
-
-                                QpcTimer localTimer;
-                                localTimer.start();
-
-                                while (running.load(std::memory_order_relaxed)) {
-                                    for (int k = 0; k < 100; ++k) {
-                                        list.add(counter++);
-                                    }
-                                    localWrites += 100;
-                                }
-
-                                u64 elapsed = localTimer.stopNs();
-                                totalWrites.fetch_add(localWrites, std::memory_order_relaxed);
-                                writeTimeNs.fetch_add(elapsed, std::memory_order_relaxed);
+                            threads.emplace_back([&list, &results, rThreads, w]() {
+                                results[rThreads + w] = runConcurrentTask(list, false, w, kMeasureNs, kWarmupNs);
                             });
                         }
-
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                        running.store(false, std::memory_order_relaxed);
 
                         for (auto& t : threads) {
                             t.join();
                         }
 
-                        double rNs = totalReads.load() > 0 ? (double)readTimeNs.load() / (double)totalReads.load() : 0.0;
-                        double wNs = totalWrites.load() > 0 ? (double)writeTimeNs.load() / (double)totalWrites.load() : 0.0;
+                        u64 totalR = 0;
+                        u64 totalRElapsedNs = 0;
+                        u64 totalW = 0;
+                        u64 totalWElapsedNs = 0;
 
-                        logConcurrentMetrics(totalThreads, rThreads, wThreads, rNs, wNs);
+                        for (int r = 0; r < rThreads; ++r) {
+                            totalR += results[r].ops;
+                            if (results[r].elapsedNs > totalRElapsedNs) {
+                                totalRElapsedNs = results[r].elapsedNs;
+                            }
+                        }
+                        for (int w = 0; w < wThreads; ++w) {
+                            totalW += results[rThreads + w].ops;
+                            if (results[rThreads + w].elapsedNs > totalWElapsedNs) {
+                                totalWElapsedNs = results[rThreads + w].elapsedNs;
+                            }
+                        }
+
+                        logConcurrentMetrics(totalThreads, rThreads, wThreads, totalR, totalRElapsedNs, totalW, totalWElapsedNs);
                     }
                 }
             }
@@ -750,12 +854,14 @@ namespace Catelier::test::architecture::imp {
                     QpcTimer timer;
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(cs, 100000, intEquals);
+                        auto list = IMPList<int>(cs, intEquals);
+                        list.configurePropagation(1);
                         for (u32 i = 0; i < kElements; ++i) {
                             list.add((int) i);
                         }
                         timer.start();
-                        list.merge();
+                        list.tryMerging();
+                        list.awaitMerging();
                         samples[t] = timer.stopNs();
                     }
 
@@ -772,11 +878,12 @@ namespace Catelier::test::architecture::imp {
                 constexpr u32 kMoveIters = 100000;
 
                 for (u32 n : sizes) {
-                    auto list = IMPList<int>(1024, 100000, intEquals);
+                    auto list = IMPList<int>(1024, intEquals);
+                    list.configurePropagation(1);
                     for (u32 i = 0; i < n; ++i) {
                         list.add((int) i);
                     }
-                    list.merge();
+                    list.tryMerging();
                     list.awaitMerging();
 
                     static u64 samples[BENCH_TRIALS];
@@ -819,11 +926,13 @@ namespace Catelier::test::architecture::imp {
                     QpcTimer timer;
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 100000, intEquals);
+                        auto list = IMPList<int>(1024, intEquals);
+                        list.configurePropagation(1);
                         for (u32 i = 0; i < n; ++i) {
                             list.add((int) i);
                         }
-                        list.merge();
+                        list.tryMerging();
+                        list.awaitMerging();
 
                         timer.start();
                         list.removeAll();
@@ -839,7 +948,8 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [稳定性] 长时间反复 add/merge/clear 循环 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(256, 1, intEquals);
+                auto list = IMPList<int>(256, intEquals);
+                list.configurePropagation(1);
 
                 constexpr u32 kRounds = 1000;
                 constexpr u32 kPerRound = 500;
@@ -851,7 +961,7 @@ namespace Catelier::test::architecture::imp {
                         list.add((int) i);
                     }
                     if (r % 100 == 0) {
-                        list.merge();
+                        list.tryMerging();
                     }
                 }
                 const u64 totalNs = timer.stopNs();
@@ -861,12 +971,14 @@ namespace Catelier::test::architecture::imp {
 
             LOG("--- [统计] 合并延迟分布 ---");
             LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(1024, 1, intEquals);
+                auto list = IMPList<int>(1024, intEquals);
+                list.configurePropagation(1);
 
                 for (int i = 0; i < 100000; ++i) {
                     list.add(i);
                 }
-                list.merge();
+                list.tryMerging();
+                list.awaitMerging();
                 const usize mergeCount1 = list.presentElementCount();
 
                 static u64 samples[BENCH_TRIALS];
@@ -877,7 +989,8 @@ namespace Catelier::test::architecture::imp {
                         list.add((int) (100000 + t * 1000 + i));
                     }
                     timer.start();
-                    list.merge();
+                    list.tryMerging();
+                    list.awaitMerging();
                     samples[t] = timer.stopNs();
                 }
 

@@ -13,6 +13,10 @@
 
 namespace Catelier::src::architecture::imp {
     namespace {
+        constexpr u64 DEFAULT_PROPAGATION_DELAY_MS = 1;
+    }
+
+    namespace {
         typedef struct ElementChunk {
             typedef enum ElementState : u8 {
                 EMPTY = 0,
@@ -72,12 +76,15 @@ namespace Catelier::src::architecture::imp {
     }
 
     namespace {
+        auto IMPList_threadExitCallback(void* inThreadExitCallbackContext) -> void;
+
         typedef struct ElementChunkBundle {
             ElementChunk* currentChunk;
             foundation::concurrent::ConcurrentUnboundedQueue* sealedChunks;
 
-            // 合并突变标记，用于标记这个块包是否在合并进行阶段发生突变（比如发生添加、删除等突变操作）
-            bool isMergeMutated;
+            // 损坏标记，用于标记这个块包是否发生了破坏性突变（比如 remove），导致呈现数据作废，必须立刻被重新合并
+            // 具体表现为合并结束后立刻重新触发一次合并
+            bool isCorrupted;
         } ElementChunkBundle;
 
         auto ElementChunkBundle_createValueCallback(void* const hostContext) -> void* {
@@ -96,7 +103,7 @@ namespace Catelier::src::architecture::imp {
                 return nullptr;
             }
 
-            self->isMergeMutated = false;
+            self->isCorrupted = false;
 
             return self;
         }
@@ -130,6 +137,27 @@ namespace Catelier::src::architecture::imp {
 
             free(self);
         }
+
+        auto ElementChunkBundle_valueThreadExitCallback(void* const value, void* const hostContext) -> void* {
+            auto* const bundle = (ElementChunkBundle*) value;
+
+            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
+            if (currentChunk) {
+                auto* expected = (void*) currentChunk;
+                if (foundation::primitive::AtomicPtr_compareExchange((void**) &bundle->currentChunk, &expected, nullptr, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                    foundation::primitive::AtomicBool_store(&currentChunk->isValid, false, foundation::primitive::MemoryOrder::RELEASE);
+                    foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &currentChunk);
+
+                    if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                        foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
+                    }
+                }
+            }
+
+            IMPList_threadExitCallback(hostContext);
+
+            return value;
+        }
     }
 
     typedef struct IMPList {
@@ -141,7 +169,7 @@ namespace Catelier::src::architecture::imp {
         usize elementSize;
         usize chunkSize;
         bool (*elementEquals)(const void*, const void*);
-        u64 propagationDurationMs;
+        u64 propagationDelayMs;
 
         IMPList_ElementSortingStrategy elementSortingStrategy;
         i32 (*elementSortingComparator)(const void*, const void*);
@@ -159,7 +187,8 @@ namespace Catelier::src::architecture::imp {
         bool isMaintenanceThreadActive;
         foundation::sync::ConflatedSignal maintenanceTrigger;
 
-        bool isMergePending;
+        bool isMergeSignaled;
+        bool isMergeExecuting;
         foundation::primitive::Mutex mergeMutex;
         foundation::primitive::Mutex awaitMergingMutex;
         foundation::sync::ConditionalVar awaitMergingCondition;
@@ -170,9 +199,9 @@ namespace Catelier::src::architecture::imp {
     namespace {
         auto IMPList_threadExitCallback(void* const inThreadExitCallbackContext) -> void {
             auto* const self = (IMPList*) inThreadExitCallbackContext;
-            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
                 bool expected = false;
-                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -181,14 +210,16 @@ namespace Catelier::src::architecture::imp {
         auto IMPList_maintenanceEntry(void* const inSelf) -> void {
             auto* const self = (IMPList*) inSelf;
             while (foundation::primitive::AtomicBool_load(&self->isMaintenanceThreadActive, foundation::primitive::MemoryOrder::ACQUIRE)) {
-                foundation::sync::ConflatedSignal_timedWait(&self->maintenanceTrigger, self->propagationDurationMs);
+                foundation::sync::ConflatedSignal_timedWait(&self->maintenanceTrigger, foundation::primitive::Atomic64_load(&self->propagationDelayMs, foundation::primitive::MemoryOrder::ACQUIRE));
 
                 if (!foundation::primitive::AtomicBool_load(&self->isMaintenanceThreadActive, foundation::primitive::MemoryOrder::ACQUIRE)) {
                     break;
                 }
 
-                if (foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::ACQUIRE)) {
-                    IMPList_merge(self);
+                while (foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::ACQUIRE) && foundation::primitive::AtomicBool_load(&self->isMaintenanceThreadActive, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                    IMPList_tryMerging(self);
+
+                    foundation::primitive::Time_sleepMs(foundation::primitive::Atomic64_load(&self->propagationDelayMs, foundation::primitive::MemoryOrder::ACQUIRE));
                 }
             }
         }
@@ -225,27 +256,8 @@ namespace Catelier::src::architecture::imp {
         }
     }
 
-    namespace {
-        auto ElementChunkBundle_valueThreadExitCallback(void* const value, void* const hostContext) -> void* {
-            auto* const bundle = (ElementChunkBundle*) value;
-
-            auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
-            if (currentChunk) {
-                auto* expected = (void*) currentChunk;
-                if (foundation::primitive::AtomicPtr_compareExchange((void**) &bundle->currentChunk, &expected, nullptr, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
-                    foundation::primitive::AtomicBool_store(&currentChunk->isValid, false, foundation::primitive::MemoryOrder::RELEASE);
-                    foundation::concurrent::ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &currentChunk);
-                }
-            }
-
-            IMPList_threadExitCallback(hostContext);
-
-            return value;
-        }
-    }
-
-    auto IMPList_construct(const usize inElementSize, const usize inChunkSize, const u64 inPropagationDurationMs, const IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList* {
-        if (inElementSize == 0 || inChunkSize < 16 || inChunkSize > 16384 || inPropagationDurationMs == 0) {
+    auto IMPList_construct(const usize inElementSize, const usize inChunkSize, const IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList* {
+        if (inElementSize == 0 || inChunkSize < 16 || inChunkSize > 16384) {
             return nullptr;
         }
 
@@ -258,7 +270,7 @@ namespace Catelier::src::architecture::imp {
 
         self->elementSize = inElementSize;
         self->chunkSize = inChunkSize;
-        self->propagationDurationMs = inPropagationDurationMs;
+        foundation::primitive::Atomic64_store(&self->propagationDelayMs, DEFAULT_PROPAGATION_DELAY_MS, foundation::primitive::MemoryOrder::RELAXED);
         self->elementEquals = inElementEquals;
 
         self->elementSortingStrategy = inElementSortingStrategy;
@@ -271,7 +283,8 @@ namespace Catelier::src::architecture::imp {
         self->retiredPresentElementIndex = 0;
         self->retiredPresentElementsCapacity = 0;
 
-        self->isMergePending = false;
+        self->isMergeSignaled = false;
+        self->isMergeExecuting = false;
         self->isMaintenanceThreadActive = true;
         self->mergeCount = 0;
         self->lastMergeDurationMs = 0;
@@ -382,10 +395,12 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
-        auto* const newSelf = IMPList_construct(self->elementSize, self->chunkSize, self->propagationDurationMs, self->elementSortingStrategy, self->elementSortingComparator, self->elementEquals);
+        auto* const newSelf = IMPList_construct(self->elementSize, self->chunkSize, self->elementSortingStrategy, self->elementSortingComparator, self->elementEquals);
         if (!newSelf) {
             return nullptr;
         }
+
+        foundation::primitive::Atomic64_store(&newSelf->propagationDelayMs, foundation::primitive::Atomic64_load(&self->propagationDelayMs, foundation::primitive::MemoryOrder::ACQUIRE), foundation::primitive::MemoryOrder::RELAXED);
 
         if (self->retiredPresentElementsCapacity > 0) {
             if (!IMPList_configureRetirement(newSelf, self->retiredPresentElementsCapacity)) {
@@ -456,6 +471,17 @@ namespace Catelier::src::architecture::imp {
         return newSelf;
     }
 
+    auto IMPList_configurePropagation(IMPList* const self, const u64 inPropagationDelayMs) -> bool {
+        if (!self || inPropagationDelayMs == 0) {
+            return false;
+        }
+
+        foundation::primitive::Atomic64_store(&self->propagationDelayMs, inPropagationDelayMs, foundation::primitive::MemoryOrder::RELEASE);
+
+        foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
+
+        return true;
+    }
     auto IMPList_configureRetirement(IMPList* const self, const usize inRetiredPresentElementsCapacity) -> bool {
         if (!self) {
             return false;
@@ -760,16 +786,12 @@ namespace Catelier::src::architecture::imp {
         Atomic64_store(&currentChunk->elementCount, currentChunkElementCount + 1, MemoryOrder::RELEASE);
 
         // 首先仅原子地读合并等待标志，非合并等待状态才可进入
-        if (!AtomicBool_load(&self->isMergePending, MemoryOrder::RELAXED)) {
+        if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
             // 进行一次以 Acquire-Release 内存序原子的 CAS 操作，尝试将合并等待标志设为等待合并状态
             // 若 CAS 成功则发送信号，触发唤醒维护线程；否则认为已经被他者 CAS 抢占，跳过该次 CAS
             bool expected = false;
-            if (AtomicBool_compareExchange(&self->isMergePending, &expected, true, MemoryOrder::ACQUIRE_RELEASE)) {
+            if (AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, MemoryOrder::ACQUIRE_RELEASE)) {
                 foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
-            }
-        } else {
-            if (!AtomicBool_load(&currentBundle->isMergeMutated, MemoryOrder::RELAXED)) {
-                AtomicBool_store(&currentBundle->isMergeMutated, true, MemoryOrder::RELEASE);
             }
         }
 
@@ -861,16 +883,12 @@ namespace Catelier::src::architecture::imp {
         }
 
         // 首先仅原子地读合并等待标志，非合并等待状态才可进入
-        if (!AtomicBool_load(&self->isMergePending, MemoryOrder::RELAXED)) {
+        if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
             // 进行一次以 Acquire-Release 内存序原子的 CAS 操作，尝试将合并等待标志设为等待合并状态
             // CAS 成功则发送信号，触发唤醒维护线程；否则认为已经被他者 CAS 抢占，则跳过该次 CAS
             bool expected = false;
-            if (AtomicBool_compareExchange(&self->isMergePending, &expected, true, MemoryOrder::ACQUIRE_RELEASE)) {
+            if (AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, MemoryOrder::ACQUIRE_RELEASE)) {
                 foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
-            }
-        } else {
-            if (!AtomicBool_load(&currentBundle->isMergeMutated, MemoryOrder::RELAXED)) {
-                AtomicBool_store(&currentBundle->isMergeMutated, true, MemoryOrder::RELEASE);
             }
         }
 
@@ -911,8 +929,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -943,8 +961,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -958,9 +976,9 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
         if (removed) {
-            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
                 bool expected = false;
-                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -1002,8 +1020,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1034,8 +1052,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1049,9 +1067,9 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
         if (removed) {
-            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
                 bool expected = false;
-                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -1104,8 +1122,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1147,8 +1165,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1162,9 +1180,9 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
         if (removed) {
-            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
                 bool expected = false;
-                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -1206,8 +1224,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1238,8 +1256,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1253,9 +1271,9 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
         if (removed) {
-            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
                 bool expected = false;
-                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -1294,8 +1312,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&currentChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1323,8 +1341,8 @@ namespace Catelier::src::architecture::imp {
                             foundation::primitive::AtomicBool_store(&sealedChunk->isTainted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
-                        if (!foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::RELAXED)) {
-                            foundation::primitive::AtomicBool_store(&bundle->isMergeMutated, true, foundation::primitive::MemoryOrder::RELEASE);
+                        if (!foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::RELAXED)) {
+                            foundation::primitive::AtomicBool_store(&bundle->isCorrupted, true, foundation::primitive::MemoryOrder::RELEASE);
                         }
 
                         removed = true;
@@ -1338,9 +1356,9 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
         if (removed) {
-            if (!foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
                 bool expected = false;
-                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                     foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
                 }
             }
@@ -1515,34 +1533,60 @@ namespace Catelier::src::architecture::imp {
         self->elementSortingStrategy = inElementSortingStrategy;
         self->elementSortingComparator = inElementSortingComparator;
 
-        return IMPList_merge(self);
+        IMPList_tryMerging(self);
+
+        return IMPList_awaitMerging(self);
     }
 
-    auto IMPList_merge(IMPList* const self) -> bool {
+    auto IMPList_tryMerging(IMPList* const self) -> bool {
         if (!self) {
             return false;
         }
 
+        bool expectedExecuting = false;
+        if (!foundation::primitive::AtomicBool_compareExchange(&self->isMergeExecuting, &expectedExecuting, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+            if (!foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::RELAXED)) {
+                bool expectedSignaled = false;
+                if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expectedSignaled, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+                    foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
+                }
+            }
+
+            return true;
+        }
+
         const u64 mergeStartTimeMs = foundation::primitive::Time_currentMs();
+
+        foundation::primitive::AtomicBool_store(&self->isMergeSignaled, false, foundation::primitive::MemoryOrder::RELAXED);
 
         auto* sourceChunks = (ElementChunk**) malloc(sizeof(ElementChunk*) * 16);
         auto* sourceElementCounts = (usize*) malloc(sizeof(usize) * 16);
         if (!sourceChunks || !sourceElementCounts) {
             free(sourceChunks);
             free(sourceElementCounts);
+
+            foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
+
+            foundation::primitive::AtomicBool_store(&self->isMergeExecuting, false, foundation::primitive::MemoryOrder::RELEASE);
+
+            foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
+
+            foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
+
             return false;
         }
 
         usize sourceCount = 0;
         usize sourceCapacity = 16;
         usize totalElementCount = 0;
+        bool collectFailed = false;
 
         foundation::primitive::Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
 
         for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
-            AtomicBool_store(&bundle->isMergeMutated, false, foundation::primitive::MemoryOrder::RELAXED);
+            AtomicBool_store(&bundle->isCorrupted, false, foundation::primitive::MemoryOrder::RELAXED);
 
             auto* node = foundation::concurrent::ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
             while (node) {
@@ -1555,19 +1599,15 @@ namespace Catelier::src::architecture::imp {
 
                             auto* const newChunks = (ElementChunk**) realloc(sourceChunks, sizeof(ElementChunk*) * newCapacity);
                             if (!newChunks) {
-                                foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
-                                free(sourceChunks);
-                                free(sourceElementCounts);
-                                return false;
+                                collectFailed = true;
+                                break;
                             }
                             sourceChunks = newChunks;
 
                             auto* const newElementCounts = (usize*) realloc(sourceElementCounts, sizeof(usize) * newCapacity);
                             if (!newElementCounts) {
-                                foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
-                                free(sourceChunks);
-                                free(sourceElementCounts);
-                                return false;
+                                collectFailed = true;
+                                break;
                             }
 
                             sourceElementCounts = newElementCounts;
@@ -1577,12 +1617,15 @@ namespace Catelier::src::architecture::imp {
                         sourceChunks[sourceCount] = chunk;
                         sourceElementCounts[sourceCount] = chunkElementCount;
                         sourceCount++;
-
                         totalElementCount += chunkElementCount;
                     }
                 }
 
                 node = foundation::concurrent::ConcurrentUnboundedQueueNode_next(node);
+            }
+
+            if (collectFailed) {
+                break;
             }
 
             auto* const currentChunk = (ElementChunk*) foundation::primitive::AtomicPtr_load((void* const*) &bundle->currentChunk, foundation::primitive::MemoryOrder::ACQUIRE);
@@ -1595,19 +1638,15 @@ namespace Catelier::src::architecture::imp {
 
                         auto* const newChunks = (ElementChunk**) realloc(sourceChunks, sizeof(ElementChunk*) * newCapacity);
                         if (!newChunks) {
-                            foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
-                            free(sourceChunks);
-                            free(sourceElementCounts);
-                            return false;
+                            collectFailed = true;
+                            break;
                         }
                         sourceChunks = newChunks;
 
                         auto* const newElementCounts = (usize*) realloc(sourceElementCounts, sizeof(usize) * newCapacity);
                         if (!newElementCounts) {
-                            foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
-                            free(sourceChunks);
-                            free(sourceElementCounts);
-                            return false;
+                            collectFailed = true;
+                            break;
                         }
 
                         sourceElementCounts = newElementCounts;
@@ -1617,13 +1656,27 @@ namespace Catelier::src::architecture::imp {
                     sourceChunks[sourceCount] = currentChunk;
                     sourceElementCounts[sourceCount] = chunkElementCount;
                     sourceCount++;
-
                     totalElementCount += chunkElementCount;
                 }
             }
         }
 
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
+
+        if (collectFailed) {
+            free(sourceChunks);
+            free(sourceElementCounts);
+
+            foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
+
+            foundation::primitive::AtomicBool_store(&self->isMergeExecuting, false, foundation::primitive::MemoryOrder::RELEASE);
+
+            foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
+
+            foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
+
+            return false;
+        }
 
         u8* newPresentElements = nullptr;
         usize newPresentElementCount = 0;
@@ -1633,6 +1686,15 @@ namespace Catelier::src::architecture::imp {
             if (!newPresentElements) {
                 free(sourceChunks);
                 free(sourceElementCounts);
+
+                foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
+
+                foundation::primitive::AtomicBool_store(&self->isMergeExecuting, false, foundation::primitive::MemoryOrder::RELEASE);
+
+                foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
+
+                foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
+
                 return false;
             }
 
@@ -1708,6 +1770,15 @@ namespace Catelier::src::architecture::imp {
             newSpan = (IMPList::PresentElementsSpan*) malloc(sizeof(IMPList::PresentElementsSpan));
             if (!newSpan) {
                 free(newPresentElements);
+
+                foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
+
+                foundation::primitive::AtomicBool_store(&self->isMergeExecuting, false, foundation::primitive::MemoryOrder::RELEASE);
+
+                foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
+
+                foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
+
                 return false;
             }
 
@@ -1726,32 +1797,32 @@ namespace Catelier::src::architecture::imp {
         foundation::primitive::Atomic64_fetchAdd(&self->mergeCount, 1, foundation::primitive::MemoryOrder::RELAXED);
         foundation::primitive::Atomic64_store(&self->lastMergeDurationMs, foundation::primitive::Time_currentMs() - mergeStartTimeMs, foundation::primitive::MemoryOrder::RELAXED);
 
-        foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
-
-        foundation::primitive::AtomicBool_store(&self->isMergePending, false, foundation::primitive::MemoryOrder::RELEASE);
-
-        bool anyMutated = false;
+        bool anyCorrupted = false;
 
         foundation::primitive::Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
 
         for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
-            if (foundation::primitive::AtomicBool_load(&bundle->isMergeMutated, foundation::primitive::MemoryOrder::ACQUIRE)) {
-                anyMutated = true;
+            if (foundation::primitive::AtomicBool_load(&bundle->isCorrupted, foundation::primitive::MemoryOrder::ACQUIRE)) {
+                anyCorrupted = true;
                 break;
             }
         }
 
         foundation::primitive::Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
-        if (anyMutated) {
-            bool expected = false;
-            if (foundation::primitive::AtomicBool_compareExchange(&self->isMergePending, &expected, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
+        if (anyCorrupted) {
+            bool expectedSignaled = false;
+            if (foundation::primitive::AtomicBool_compareExchange(&self->isMergeSignaled, &expectedSignaled, true, foundation::primitive::MemoryOrder::ACQUIRE_RELEASE)) {
                 foundation::sync::ConflatedSignal_signal(&self->maintenanceTrigger);
             }
-        } else {
-            foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
         }
+
+        foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
+
+        foundation::primitive::AtomicBool_store(&self->isMergeExecuting, false, foundation::primitive::MemoryOrder::RELEASE);
+
+        foundation::sync::ConditionalVar_broadcast(&self->awaitMergingCondition);
 
         foundation::primitive::Mutex_unlock(&self->awaitMergingMutex);
 
@@ -1764,7 +1835,7 @@ namespace Catelier::src::architecture::imp {
 
         foundation::primitive::Mutex_lock(&self->awaitMergingMutex);
 
-        while (foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+        while (foundation::primitive::AtomicBool_load(&self->isMergeExecuting, foundation::primitive::MemoryOrder::ACQUIRE) || foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::ACQUIRE)) {
             foundation::sync::ConditionalVar_wait(&self->awaitMergingCondition, &self->awaitMergingMutex);
         }
 
@@ -1781,7 +1852,7 @@ namespace Catelier::src::architecture::imp {
 
         bool result = true;
 
-        while (foundation::primitive::AtomicBool_load(&self->isMergePending, foundation::primitive::MemoryOrder::RELAXED)) {
+        while (foundation::primitive::AtomicBool_load(&self->isMergeExecuting, foundation::primitive::MemoryOrder::ACQUIRE) || foundation::primitive::AtomicBool_load(&self->isMergeSignaled, foundation::primitive::MemoryOrder::ACQUIRE)) {
             if (inTimeoutMs == 0 || !foundation::sync::ConditionalVar_timedWait(&self->awaitMergingCondition, &self->awaitMergingMutex, inTimeoutMs)) {
                 result = false;
                 break;
