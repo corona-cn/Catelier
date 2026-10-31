@@ -123,6 +123,15 @@ namespace Catelier::include::architecture::imp {
 
                 return src::architecture::imp::IMPList_configureMaintenanceMerging(this->handle, inIsMaintenanceMergingEnabled);
             }
+            auto configurePresentElementsSpanRecycling(const bool inIsPresentElementsSpanRecyclingEnabled) -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_configurePresentElementsSpanRecycling(this->handle, inIsPresentElementsSpanRecyclingEnabled);
+            }
 
             auto presentElementsSpan(const ElementType*& outElements, usize& outElementCount) const -> bool {
                 assert(this->handle != nullptr);

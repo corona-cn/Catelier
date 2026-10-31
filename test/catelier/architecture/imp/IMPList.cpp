@@ -258,10 +258,16 @@ namespace Catelier::test::architecture::imp {
                 double invTicksPerNs = 1.0;
         };
 
-        auto logPerOp(const char* label, const double nsPerOp, const double sdNs, const u64 medianNs, const u32 n) -> void {
-            const double ns10x = nsPerOp * 10.0;
-            const double sd10x = sdNs * 10.0;
-            LOG(label, "：平均 ", ns10x / 10.0, " ns/op，标准差 ", sd10x / 10.0, " ns，中位数 ", medianNs, " ns（", n, " 轮掐头去尾）");
+        auto logPerOp(const char* label, const u64* samples, const u32 n, const double scale) -> void {
+            const double meanNs = meanOf(samples, BENCH_TRIM, n - BENCH_TRIM) / scale;
+            const double sdNs = stddevOf(samples, BENCH_TRIM, n - BENCH_TRIM, meanNs * scale) / scale;
+            const double minNs = (double) samples[0] / scale;
+            const double p50Ns = (double) computePercentile(samples, n, 0.50) / scale;
+            const double p90Ns = (double) computePercentile(samples, n, 0.90) / scale;
+            const double p99Ns = (double) computePercentile(samples, n, 0.99) / scale;
+            const double maxNs = (double) samples[n - 1] / scale;
+
+            LOG(label, "：平均 ", meanNs, " ns/op，标准差 ", sdNs, " ns，最小 ", minNs, " ns，P50 ", p50Ns, " ns，P90 ", p90Ns, " ns，P99 ", p99Ns, " ns，最大 ", maxNs, " ns（", n, " 轮）");
         }
 
         auto logThroughput(const char* label, const double nsPerOp, const double sdNs, const u64 totalOps) -> void {
@@ -1060,9 +1066,7 @@ namespace Catelier::test::architecture::imp {
                 }
 
                 sortU64(samples, BENCH_TRIALS);
-                const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10.0;
-                const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10.0) / 10.0;
-                logPerOp("add 延迟", m, sd, samples[BENCH_TRIALS / 2] / 10, BENCH_TRIALS);
+                logPerOp("add 延迟", samples, BENCH_TRIALS, 10.0);
             }
 
             LOG("--- [性能] 单线程 discard 延迟（完整 CAS，跳过合并数据处理，带预热，trial 内子批 IQR 剔除，TSC 计时） ---");
@@ -1096,9 +1100,7 @@ namespace Catelier::test::architecture::imp {
                 }
 
                 sortU64(samples, BENCH_TRIALS);
-                const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10.0;
-                const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10.0) / 10.0;
-                logPerOp("discard 延迟", m, sd, samples[BENCH_TRIALS / 2] / 10, BENCH_TRIALS);
+                logPerOp("discard 延迟", samples, BENCH_TRIALS, 10.0);
             }
 
             LOG("--- [性能] 单线程 discardAll 调用延迟（O(1) 标志设置，不含合并，带预热，trial 内子批 IQR 剔除，TSC 计时） ---");
@@ -1131,9 +1133,7 @@ namespace Catelier::test::architecture::imp {
                 }
 
                 sortU64(samples, BENCH_TRIALS);
-                const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10.0;
-                const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10.0) / 10.0;
-                logPerOp("discardAll 调用延迟", m, sd, samples[BENCH_TRIALS / 2] / 10, BENCH_TRIALS);
+                logPerOp("discardAll 调用延迟", samples, BENCH_TRIALS, 10.0);
             }
 
             LOG("--- [性能] add + merge 混合吞吐（不同规模，检验线性） ---");
@@ -1146,30 +1146,33 @@ namespace Catelier::test::architecture::imp {
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(1024, 1024, intEquals);
+                        list.configureMaintenanceMerging(false);
+
+                        list.add(0);
+                        list.tryMerging();
+
                         timer.start();
                         for (u32 i = 0; i < n; ++i) {
                             list.add((int) i);
                         }
                         list.tryMerging();
-                        list.awaitMerging();
                         samples[t] = timer.stopNs() * 100 / n;
                     }
 
                     sortU64(samples, BENCH_TRIALS);
-                    const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
-                    const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 100.0) / 100.0;
-                    logPerOp("add+merge 吞吐", m, sd, samples[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                    logPerOp("add+merge 吞吐", samples, BENCH_TRIALS, 100.0);
                 }
             }
 
             LOG("--- [性能] get 快照访问延迟 ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(1024, 1024, intEquals);
+                list.configureMaintenanceMerging(false);
+
                 for (int i = 0; i < 100000; ++i) {
                     list.add(i);
                 }
                 list.tryMerging();
-                list.awaitMerging();
 
                 static u64 samples[BENCH_TRIALS];
                 constexpr u32 kIters = 20000000;
@@ -1189,19 +1192,18 @@ namespace Catelier::test::architecture::imp {
                 }
 
                 sortU64(samples, BENCH_TRIALS);
-                const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10.0;
-                const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10.0) / 10.0;
-                logPerOp("get 延迟", m, sd, samples[BENCH_TRIALS / 2] / 10, BENCH_TRIALS);
+                logPerOp("get 延迟", samples, BENCH_TRIALS, 10.0);
             }
 
             LOG("--- [性能] contains 扫描延迟（命中/未命中） ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(1024, 1024, intEquals);
+                list.configureMaintenanceMerging(false);
+
                 for (int i = 0; i < 1000; ++i) {
                     list.add(i);
                 }
                 list.tryMerging();
-                list.awaitMerging();
 
                 static u64 hitSamples[BENCH_TRIALS];
                 static u64 missSamples[BENCH_TRIALS];
@@ -1235,10 +1237,8 @@ namespace Catelier::test::architecture::imp {
                 sortU64(hitSamples, BENCH_TRIALS);
                 sortU64(missSamples, BENCH_TRIALS);
 
-                const double mHit = meanOf(hitSamples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
-                const double mMiss = meanOf(missSamples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
-                logPerOp("contains（命中）", mHit, 0.0, hitSamples[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("contains（未命中）", mMiss, 0.0, missSamples[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("contains（命中）", hitSamples, BENCH_TRIALS, 100.0);
+                logPerOp("contains（未命中）", missSamples, BENCH_TRIALS, 100.0);
             }
 
             LOG("--- [性能] contains 延迟（UNORDERED 线性 vs ASCENDING 二分，1000 元素） ---");
@@ -1248,14 +1248,15 @@ namespace Catelier::test::architecture::imp {
 
                 auto unorderedList = IMPList<int>(1024, 1024, intEquals);
                 auto sortedList = IMPList<int>(1024, 1024, intEquals);
+                unorderedList.configureMaintenanceMerging(false);
+                sortedList.configureMaintenanceMerging(false);
+
                 for (u32 i = 0; i < kElements; ++i) {
                     unorderedList.add((int) i);
                     sortedList.add((int) i);
                 }
                 unorderedList.tryMerging();
-                unorderedList.awaitMerging();
                 sortedList.naturalSort();
-                sortedList.awaitMerging();
 
                 static u64 hitUnordered[BENCH_TRIALS];
                 static u64 hitSorted[BENCH_TRIALS];
@@ -1315,10 +1316,10 @@ namespace Catelier::test::architecture::imp {
                 const double mMU = meanOf(missUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
                 const double mMS = meanOf(missSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
 
-                logPerOp("contains 命中（UNORDERED 线性）", mHU, 0.0, hitUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("contains 命中（ASCENDING 二分）", mHS, 0.0, hitSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("contains 未命中（UNORDERED 线性）", mMU, 0.0, missUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("contains 未命中（ASCENDING 二分）", mMS, 0.0, missSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("contains 命中（UNORDERED 线性）", hitUnordered, BENCH_TRIALS, 100.0);
+                logPerOp("contains 命中（ASCENDING 二分）", hitSorted, BENCH_TRIALS, 100.0);
+                logPerOp("contains 未命中（UNORDERED 线性）", missUnordered, BENCH_TRIALS, 100.0);
+                logPerOp("contains 未命中（ASCENDING 二分）", missSorted, BENCH_TRIALS, 100.0);
 
                 LOG("加速比（命中）= ", mHS > 0.0 ? mHU / mHS : 0.0, "x，加速比（未命中）= ", mMS > 0.0 ? mMU / mMS : 0.0, "x");
             }
@@ -1330,14 +1331,15 @@ namespace Catelier::test::architecture::imp {
 
                 auto unorderedList = IMPList<int>(1024, 1024, intEquals);
                 auto sortedList = IMPList<int>(1024, 1024, intEquals);
+                unorderedList.configureMaintenanceMerging(false);
+                sortedList.configureMaintenanceMerging(false);
+
                 for (u32 i = 0; i < kElements; ++i) {
                     unorderedList.add((int) i);
                     sortedList.add((int) i);
                 }
                 unorderedList.tryMerging();
-                unorderedList.awaitMerging();
                 sortedList.naturalSort();
-                sortedList.awaitMerging();
 
                 const int hitTargets[] = { 100, 500, 900 };
                 const int missTargets[] = { 100, 500, 10000 };
@@ -1400,10 +1402,10 @@ namespace Catelier::test::architecture::imp {
                 const double mMU = meanOf(missUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
                 const double mMS = meanOf(missSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
 
-                logPerOp("containsAll 命中（UNORDERED 线性）", mHU, 0.0, hitUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("containsAll 命中（ASCENDING 二分）", mHS, 0.0, hitSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("containsAll 未命中（UNORDERED 线性）", mMU, 0.0, missUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("containsAll 未命中（ASCENDING 二分）", mMS, 0.0, missSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("containsAll 命中（UNORDERED 线性）", hitUnordered, BENCH_TRIALS, 100.0);
+                logPerOp("containsAll 命中（ASCENDING 二分）", hitSorted, BENCH_TRIALS, 100.0);
+                logPerOp("containsAll 未命中（UNORDERED 线性）", missUnordered, BENCH_TRIALS, 100.0);
+                logPerOp("containsAll 未命中（ASCENDING 二分）", missSorted, BENCH_TRIALS, 100.0);
 
                 LOG("加速比（命中）= ", mHS > 0.0 ? mHU / mHS : 0.0, "x，加速比（未命中）= ", mMS > 0.0 ? mMU / mMS : 0.0, "x");
             }
@@ -1417,15 +1419,16 @@ namespace Catelier::test::architecture::imp {
 
                 auto unorderedList = IMPList<int>(1024, 1024, intEquals);
                 auto sortedList = IMPList<int>(1024, 1024, intEquals);
+                unorderedList.configureMaintenanceMerging(false);
+                sortedList.configureMaintenanceMerging(false);
+
                 for (u32 i = 0; i < kElements; ++i) {
                     const int v = (int) (i / kRepeatPerValue);
                     unorderedList.add(v);
                     sortedList.add(v);
                 }
                 unorderedList.tryMerging();
-                unorderedList.awaitMerging();
                 sortedList.naturalSort();
-                sortedList.awaitMerging();
 
                 static u64 firstUnordered[BENCH_TRIALS];
                 static u64 firstSorted[BENCH_TRIALS];
@@ -1477,10 +1480,10 @@ namespace Catelier::test::architecture::imp {
                 const double mLU = meanOf(lastUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
                 const double mLS = meanOf(lastSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
 
-                logPerOp("firstIndexOf（UNORDERED 线性）", mFU, 0.0, firstUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("firstIndexOf（ASCENDING 二分）", mFS, 0.0, firstSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("lastIndexOf（UNORDERED 线性）", mLU, 0.0, lastUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
-                logPerOp("lastIndexOf（ASCENDING 二分）", mLS, 0.0, lastSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("firstIndexOf（UNORDERED 线性）", firstUnordered, BENCH_TRIALS, 100.0);
+                logPerOp("firstIndexOf（ASCENDING 二分）", firstSorted, BENCH_TRIALS, 100.0);
+                logPerOp("lastIndexOf（UNORDERED 线性）", lastUnordered, BENCH_TRIALS, 100.0);
+                logPerOp("lastIndexOf（ASCENDING 二分）", lastSorted, BENCH_TRIALS, 100.0);
 
                 LOG("加速比（firstIndexOf）= ", mFS > 0.0 ? mFU / mFS : 0.0, "x，加速比（lastIndexOf）= ", mLS > 0.0 ? mLU / mLS : 0.0, "x");
             }
@@ -1497,6 +1500,7 @@ namespace Catelier::test::architecture::imp {
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(1024, 1024, intEquals);
+                        list.configureMaintenanceMerging(false);
 
                         std::vector<std::thread> threads;
                         timer.start();
@@ -1511,18 +1515,15 @@ namespace Catelier::test::architecture::imp {
                             thread.join();
                         }
                         list.tryMerging();
-                        list.awaitMerging();
                         samples[t] = timer.stopNs() * 100 / total;
                     }
 
                     sortU64(samples, BENCH_TRIALS);
-                    const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
-                    const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 100.0) / 100.0;
-                    logPerOp("4 线程并发 add+merge", m, sd, samples[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                    logPerOp("4 线程并发 add+merge", samples, BENCH_TRIALS, 100.0);
                 }
             }
 
-            LOG("--- [性能] 高并发读写吞吐（分线程数与读写比例） ---");
+            LOG("--- [性能] 高并发读写吞吐（分线程数与读写比例，维护线程自动合并，真实并发场景） ---");
             LOGGER_INDENT_BLOCK(true) {
                 constexpr int threadConfigs[] = {
                     1, 2, 4, 8
@@ -1600,7 +1601,7 @@ namespace Catelier::test::architecture::imp {
                 }
             }
 
-            LOG("--- [性能] merge 单独成本（不同 chunkSize） ---");
+            LOG("--- [性能] merge 单独成本（不同 chunkSize，带 Span 复用） ---");
             LOGGER_INDENT_BLOCK(true) {
                 const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
 
@@ -1611,22 +1612,25 @@ namespace Catelier::test::architecture::imp {
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(cs, 1024, intEquals);
+                        list.configureMaintenanceMerging(false);
+
                         for (u32 i = 0; i < kElements; ++i) {
                             list.add((int) i);
                         }
 
-                        list.awaitMerging();
+                        list.tryMerging();
+                        list.add(0);
 
                         timer.start();
                         list.tryMerging();
-                        list.awaitMerging();
                         samples[t] = timer.stopNs();
                     }
 
                     sortU64(samples, BENCH_TRIALS);
                     const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM);
                     const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m);
-                    LOG("chunkSize = ", cs, "，merge 单独耗时 = ", m / 1e6, " ms，标准差 ", sd / 1e6, " ms，中位数 ", samples[BENCH_TRIALS / 2] / 1e6, " ms");
+
+                    LOG("chunkSize = ", cs, "，merge 单独耗时 = 平均 ", m / 1e6, " ms，标准差 ", sd / 1e6, " ms，最小 ", samples[0] / 1e6, " ms，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1e6, " ms，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1e6, " ms，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1e6, " ms，最大 ", samples[BENCH_TRIALS - 1] / 1e6, " ms");
                 }
             }
 
@@ -1639,25 +1643,28 @@ namespace Catelier::test::architecture::imp {
 
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<int>(1024, 1024, nullptr);
+                    list.configureMaintenanceMerging(false);
+
                     for (u32 i = 0; i < kElements; ++i) {
                         list.add((int) i);
                     }
+
+                    list.tryMerging();
+
                     for (u32 i = 0; i < kDiscards; ++i) {
                         list.discard((int) i);
                     }
 
-                    list.awaitMerging();
-
                     timer.start();
                     list.tryMerging();
-                    list.awaitMerging();
                     samples[t] = timer.stopNs();
                 }
 
                 sortU64(samples, BENCH_TRIALS);
                 const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM);
                 const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m);
-                LOG("10万添加 + 1万删除 → merge 耗时：平均 ", m / 1000.0, " us，标准差 ", sd / 1000.0, " us");
+
+                LOG("10万添加 + 1万删除 → 增量 merge 耗时 = 平均 ", m / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us");
             }
 
             LOG("--- [性能] discard 转化 tombstones 延迟（朴素路径） ---");
@@ -1681,25 +1688,28 @@ namespace Catelier::test::architecture::imp {
 
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<CustomStruct>(1024, 1024, customEquals);
+                    list.configureMaintenanceMerging(false);
+
                     for (u32 i = 0; i < kElements; ++i) {
                         list.add({ (int) i, (int) i, (int) i });
                     }
+
+                    list.tryMerging();
+
                     for (u32 i = 0; i < kDiscards; ++i) {
                         list.discard({ (int) i, (int) i, (int) i });
                     }
 
-                    list.awaitMerging();
-
                     timer.start();
                     list.tryMerging();
-                    list.awaitMerging();
                     samples[t] = timer.stopNs();
                 }
 
                 sortU64(samples, BENCH_TRIALS);
                 const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM);
                 const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m);
-                LOG("5万添加 + 5千删除 → merge 耗时：平均 ", m / 1000.0, " us，标准差 ", sd / 1000.0, " us");
+
+                LOG("5万添加 + 5千删除 → 增量 merge 耗时 = 平均 ", m / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us");
             }
 
             LOG("--- [性能] move 常数时间（不同规模） ---");
@@ -1709,11 +1719,12 @@ namespace Catelier::test::architecture::imp {
 
                 for (u32 n : sizes) {
                     auto list = IMPList<int>(1024, 1024, intEquals);
+                    list.configureMaintenanceMerging(false);
+
                     for (u32 i = 0; i < n; ++i) {
                         list.add((int) i);
                     }
                     list.tryMerging();
-                    list.awaitMerging();
 
                     static u64 samples[BENCH_TRIALS];
                     QpcTimer timer;
@@ -1742,7 +1753,8 @@ namespace Catelier::test::architecture::imp {
                     sortU64(samples, BENCH_TRIALS);
                     const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10000.0;
                     const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10000.0) / 10000.0;
-                    LOG("move ", n, " 元素：平均 ", m, " ns/op，标准差 ", sd, " ns，中位数 ", samples[BENCH_TRIALS / 2] / 10000, " ns（", BENCH_TRIALS, " 轮掐头去尾，每轮 ", kMoveIters, " 次）");
+
+                    LOG("move ", n, " 元素：平均 ", m, " ns/op，标准差 ", sd, " ns，最小 ", samples[0] / 10000.0, " ns，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 10000.0, " ns，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 10000.0, " ns，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 10000.0, " ns，最大 ", samples[BENCH_TRIALS - 1] / 10000.0, " ns（", BENCH_TRIALS, " 轮掐头去尾，每轮 ", kMoveIters, " 次）");
                 }
             }
 
@@ -1756,11 +1768,12 @@ namespace Catelier::test::architecture::imp {
 
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(1024, 1024, intEquals);
+                        list.configureMaintenanceMerging(false);
+
                         for (u32 i = 0; i < n; ++i) {
                             list.add((int) i);
                         }
                         list.tryMerging();
-                        list.awaitMerging();
 
                         timer.start();
                         list.removeAll();
@@ -1770,13 +1783,15 @@ namespace Catelier::test::architecture::imp {
                     sortU64(samples, BENCH_TRIALS);
                     const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM);
                     const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m);
-                    LOG("clear ", n, " 元素：平均 ", m / 1e6, " ms，标准差 ", sd / 1e6, " ms");
+
+                    LOG("clear ", n, " 元素：平均 ", m / 1e6, " ms，标准差 ", sd / 1e6, " ms，最小 ", samples[0] / 1e6, " ms，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1e6, " ms，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1e6, " ms，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1e6, " ms，最大 ", samples[BENCH_TRIALS - 1] / 1e6, " ms");
                 }
             }
 
             LOG("--- [稳定性] 长时间反复 add/merge/clear 循环 ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(256, 1024, intEquals);
+                list.configureMaintenanceMerging(false);
 
                 constexpr u32 kRounds = 1000;
                 constexpr u32 kPerRound = 500;
@@ -1799,12 +1814,12 @@ namespace Catelier::test::architecture::imp {
             LOG("--- [统计] 合并延迟分布 ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(1024, 1024, intEquals);
+                list.configureMaintenanceMerging(false);
 
                 for (int i = 0; i < 100000; ++i) {
                     list.add(i);
                 }
                 list.tryMerging();
-                list.awaitMerging();
                 const usize mergeCount1 = list.presentElementCount();
 
                 static u64 samples[BENCH_TRIALS];
@@ -1814,18 +1829,18 @@ namespace Catelier::test::architecture::imp {
                     for (int i = 0; i < 1000; ++i) {
                         list.add((int) (100000 + t * 1000 + i));
                     }
-                    list.awaitMerging();
+
                     timer.start();
                     list.tryMerging();
-                    list.awaitMerging();
                     samples[t] = timer.stopNs();
                 }
 
                 sortU64(samples, BENCH_TRIALS);
                 const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM);
                 const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m);
+
                 LOG("增量 merge 延迟：平均 ", m / 1000.0, " us，标准差 ", sd / 1000.0, " us");
-                LOG("  最小 ", samples[0] / 1000.0, " us，中位 ", samples[BENCH_TRIALS / 2] / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us");
+                LOG("  最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us");
                 LOG("  初始 present = ", mergeCount1, "，累计写入 151000 元素");
             }
         }
