@@ -45,6 +45,7 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_removeAll(IMPList* self) -> bool;
 
     auto IMPList_discard(IMPList* self, const void* inElement) -> bool;
+    auto IMPList_discardAll(IMPList* self) -> bool;
 
     auto IMPList_find(const IMPList* self, const void* inElement) -> const void*;
     auto IMPList_contains(const IMPList* self, const void* inElement) -> bool;

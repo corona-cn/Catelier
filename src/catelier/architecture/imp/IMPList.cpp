@@ -350,6 +350,8 @@ namespace Catelier::src::architecture::imp {
         foundation::concurrency::ThreadLocalTable chunkBundleThreadLocalTable;
         foundation::concurrency::ThreadLocalTable discardBufferBundleThreadLocalTable;
 
+        bool isDiscardAllSignaled;
+
         alignas(64) PresentElementsSpan** retiredPresentElements;
         usize retiredPresentElementsCapacity;
         usize retiredPresentElementCount;
@@ -475,6 +477,8 @@ namespace Catelier::src::architecture::imp {
         self->elementSortingComparator = inElementSortingComparator;
 
         self->presentElementsSpan = nullptr;
+
+        self->isDiscardAllSignaled = false;
 
         self->retiredPresentElements = nullptr;
         self->retiredPresentElementCount = 0;
@@ -1702,6 +1706,23 @@ namespace Catelier::src::architecture::imp {
 
         return true;
     }
+    auto IMPList_discardAll(IMPList* const self) -> bool {
+        using namespace foundation::primitive;
+
+        if (!self) {
+            return false;
+        }
+
+        // 仅原子地设置全丢弃等待标志，全丢弃的封装与内容清空交由合并线程处理
+        AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
+
+        // 仅原子地设置合并等待标志，唤醒维护线程的工作交由定时轮询或消费者触发
+        if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
+            AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
+        }
+
+        return true;
+    }
 
     auto IMPList_find(const IMPList* const self, const void* const inElement) -> const void* {
         if (!self || !inElement) {
@@ -1901,6 +1922,8 @@ namespace Catelier::src::architecture::imp {
 
         AtomicBool_store(&self->isMergeSignaled, false, MemoryOrder::RELAXED);
 
+        const bool isDiscardAll = AtomicBool_load(&self->isDiscardAllSignaled, MemoryOrder::ACQUIRE);
+
         auto* sourceChunks = (ElementChunk**) malloc(sizeof(ElementChunk*) * 16);
         auto* sourceElementCounts = (usize*) malloc(sizeof(usize) * 16);
         if (!sourceChunks || !sourceElementCounts) {
@@ -1933,6 +1956,33 @@ namespace Catelier::src::architecture::imp {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             AtomicBool_store(&bundle->isCorrupted, false, MemoryOrder::RELAXED);
+
+            if (isDiscardAll) {
+                // 封存所有当前块，使窗口内 add 全部被丢弃
+                auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
+                if (currentChunk) {
+                    if (AtomicBool_exchange(&currentChunk->isValid, false, MemoryOrder::ACQUIRE_RELEASE)) {
+                        ConcurrentUnboundedQueue_enqueue(bundle->sealedChunks, &currentChunk);
+                    }
+
+                    AtomicPtr_store((void**) &bundle->currentChunk, nullptr, MemoryOrder::RELEASE);
+                }
+
+                // 清空所有封装块的内容贡献，不释放结构，避免窗口内 add 线程的 UAF
+                auto* sealedChunkNode = ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+                while (sealedChunkNode) {
+                    auto* const sealedChunk = *((ElementChunk**) ConcurrentUnboundedQueueNode_data(sealedChunkNode));
+                    if (sealedChunk) {
+                        Atomic64_store(&sealedChunk->elementCount, 0, MemoryOrder::RELEASE);
+                    }
+
+                    sealedChunkNode = ConcurrentUnboundedQueueNode_next(sealedChunkNode);
+                }
+
+                continue;
+            }
+
+            // === 正常收集路径 ===
 
             auto* node = ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
             while (node) {
@@ -2035,7 +2085,44 @@ namespace Catelier::src::architecture::imp {
         usize discardCapacity = 16;
         bool discardCollectFailed = false;
 
-        if (self->discardBufferBundleThreadLocalTable.headEntry != nullptr) {
+        if (isDiscardAll) {
+            Mutex_lock(&self->discardBufferBundleThreadLocalTable.lock);
+
+            for (auto* entry = self->discardBufferBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+                auto* const bundle = (DiscardBufferBundle*) entry->value;
+
+                while (true) {
+                    void* const slot = ConcurrentUnboundedQueue_dequeueSlot(bundle->sealedBuffers);
+                    if (!slot) {
+                        break;
+                    }
+
+                    auto* const buffer = *(DiscardBuffer**) slot;
+
+                    free(slot);
+
+                    Atomic64_store(&buffer->elementCount, 0, MemoryOrder::RELEASE);
+
+                    AtomicBool_store(&buffer->isValid, true, MemoryOrder::RELEASE);
+
+                    ConcurrentUnboundedQueue_enqueue(bundle->recycledBuffers, &buffer);
+                }
+
+                auto* const currentBuffer = (DiscardBuffer*) AtomicPtr_load((void* const*) &bundle->currentBuffer, MemoryOrder::ACQUIRE);
+                if (currentBuffer) {
+                    auto* expected = (void*) currentBuffer;
+                    if (AtomicPtr_compareExchange((void**) &bundle->currentBuffer, &expected, nullptr, MemoryOrder::ACQUIRE_RELEASE)) {
+                        Atomic64_store(&currentBuffer->elementCount, 0, MemoryOrder::RELEASE);
+
+                        AtomicBool_store(&currentBuffer->isValid, true, MemoryOrder::RELEASE);
+
+                        ConcurrentUnboundedQueue_enqueue(bundle->recycledBuffers, &currentBuffer);
+                    }
+                }
+            }
+
+            Mutex_unlock(&self->discardBufferBundleThreadLocalTable.lock);
+        } else if (self->discardBufferBundleThreadLocalTable.headEntry != nullptr) {
             discardElements = (u8*) malloc(self->elementSize * discardCapacity);
             if (!discardElements) {
                 free(sourceChunks);
@@ -2394,6 +2481,10 @@ namespace Catelier::src::architecture::imp {
             }
             newSpan->elements = newPresentElements;
             newSpan->count = newPresentElementCount;
+        }
+
+        if (isDiscardAll) {
+            AtomicBool_store(&self->isDiscardAllSignaled, false, MemoryOrder::RELEASE);
         }
 
         Mutex_lock(&self->mergeMutex);

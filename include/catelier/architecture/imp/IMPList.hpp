@@ -311,6 +311,15 @@ namespace Catelier::include::architecture::imp {
 
                 return src::architecture::imp::IMPList_discard(this->handle, &inElement);
             }
+            auto discardAll() -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_discardAll(this->handle);
+            }
 
             auto begin() const -> ConstIterator {
                 assert(this->handle != nullptr);

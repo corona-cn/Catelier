@@ -600,6 +600,66 @@ namespace Catelier::test::architecture::imp {
                 LOG("contains(3) = ", list.contains(3) ? "PASS" : "FAIL");
             }
 
+            LOG("--- [正确性] discardAll 基础语义 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024, intEquals);
+                for (int i = 0; i < 100; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("discardAll 前 present = ", list.presentElementCount(), "（应为 100）");
+
+                list.discardAll();
+                list.awaitMerging();
+                LOG("discardAll 后 present = ", list.presentElementCount(), "（应为 0）");
+                LOG("discardAll 后 isEmpty = ", list.isEmpty() ? "PASS" : "FAIL");
+
+                auto list2 = IMPList<int>(64, 1024, intEquals);
+                list2.discardAll();
+                list2.awaitMerging();
+                LOG("空列表 discardAll → present = ", list2.presentElementCount(), "（应为 0）");
+
+                list.discardAll();
+                list.discardAll();
+                list.awaitMerging();
+                LOG("重复 discardAll 幂等 → present = ", list.presentElementCount(), "（应为 0）");
+
+                list.add(999);
+                list.awaitMerging();
+                LOG("discardAll 后 add：present = ", list.presentElementCount(), "（应为 1）");
+                LOG("值正确：", *((const int*) list.get(0)) == 999 ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [正确性] discardAll 窗口语义（窗口内 add 丢弃） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024, intEquals);
+                list.configureMaintenanceMerging(false);
+
+                for (int i = 0; i < 50; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("discardAll 前 present = ", list.presentElementCount(), "（应为 50）");
+
+                list.discardAll();
+                for (int i = 0; i < 20; ++i) {
+                    list.add(100 + i);
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("窗口内 add 20 个 → present = ", list.presentElementCount(), "（窗口语义：应为 0）");
+                LOG("窗口内 add 全部丢弃：", list.presentElementCount() == 0 ? "PASS" : "FAIL");
+
+                list.configureMaintenanceMerging(true);
+                list.add(200);
+                list.awaitMerging();
+                LOG("窗口结束后 add：present = ", list.presentElementCount(), "（应为 1）");
+                LOG("窗口结束后 add 正常保留：", list.presentElementCount() == 1 && *((const int*) list.get(0)) == 200 ? "PASS" : "FAIL");
+            }
+
             LOG("--- [正确性] copy / move 深度语义 ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto original = IMPList<int>(16, 1024, intEquals);
@@ -802,6 +862,40 @@ namespace Catelier::test::architecture::imp {
                 LOG("并发 discard 10000 元素后 present = ", list.presentElementCount(), "（应为 0）");
             }
 
+            LOG("--- [并发] discardAll 与并发 add 窗口语义 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024, intEquals);
+                list.configureMaintenanceMerging(false);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("discardAll 前 present = ", list.presentElementCount(), "（应为 10000）");
+
+                list.discardAll();
+
+                std::vector<std::thread> threads;
+                for (int t = 0; t < 4; ++t) {
+                    threads.emplace_back([&list, t]() {
+                        for (int i = 0; i < 2500; ++i) {
+                            list.add(t * 2500 + i);
+                        }
+                    });
+                }
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("4 线程并发 add 10000 元素 → present = ", list.presentElementCount(), "（窗口语义：应为 0）");
+                LOG("并发 add 全部丢弃：", list.presentElementCount() == 0 ? "PASS" : "FAIL");
+
+                list.configureMaintenanceMerging(true);
+            }
+
             LOG("--- [并发] 线程退出（写线程 join 触发 threadExitCallback） ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(64, 1024, intEquals);
@@ -907,6 +1001,41 @@ namespace Catelier::test::architecture::imp {
                 const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10.0;
                 const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10.0) / 10.0;
                 logPerOp("discard 延迟", m, sd, samples[BENCH_TRIALS / 2] / 10, BENCH_TRIALS);
+            }
+
+            LOG("--- [性能] 单线程 discardAll 调用延迟（O(1) 标志设置，不含合并，带预热，trial 内子批 IQR 剔除，TSC 计时） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                static u64 samples[BENCH_TRIALS];
+                constexpr u32 kBatch = 20000;
+                constexpr u32 kSubBatchSize = 100;
+                constexpr u32 kSubBatchCount = kBatch / kSubBatchSize;
+
+                static u64 subSamples[kSubBatchCount];
+                TscTimer timer;
+
+                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
+                    auto list = IMPList<int>(16384, 1024, intEquals);
+                    list.configureMaintenanceMerging(false);
+
+                    // 预热
+                    list.discardAll();
+
+                    for (u32 s = 0; s < kSubBatchCount; ++s) {
+                        timer.start();
+                        for (u32 i = 0; i < kSubBatchSize; ++i) {
+                            list.discardAll();
+                        }
+                        subSamples[s] = timer.stopTicks();
+                    }
+
+                    const u64 ticksMean = computeTrialMeanWithIqr(subSamples, kSubBatchCount, 1.5, 2.0);
+                    samples[t] = (u64) (timer.ticksToScaledNs(ticksMean, 10.0 / (double) kSubBatchSize) + 0.5);
+                }
+
+                sortU64(samples, BENCH_TRIALS);
+                const double m = meanOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 10.0;
+                const double sd = stddevOf(samples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM, m * 10.0) / 10.0;
+                logPerOp("discardAll 调用延迟", m, sd, samples[BENCH_TRIALS / 2] / 10, BENCH_TRIALS);
             }
 
             LOG("--- [性能] add + merge 混合吞吐（不同规模，检验线性） ---");
