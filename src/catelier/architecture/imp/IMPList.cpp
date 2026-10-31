@@ -16,10 +16,26 @@ namespace Catelier::src::architecture::imp {
         namespace Internal {
             constexpr u64 DEFAULT_PROPAGATION_POLLING_INTERVAL_MS = 1;
             constexpr u64 DEFAULT_PROPAGATION_BACKOFF_INTERVAL_MS = 1;
+            constexpr usize DISCARD_LINEAR_THRESHOLD = 16;
 
             namespace {
                 auto hashElementKey(const u64 inElementKey) -> usize {
                     return ((usize) inElementKey) * ((usize) 0x9E3779B97F4A7C15ULL);
+                }
+
+                auto fnv1aHash64(const void* const inMemory, const usize inSize) -> u64 {
+                    constexpr u64 FNV_OFFSET_BASIS = 14695981039346656037ULL;
+                    constexpr u64 FNV_PRIME = 1099511628211ULL;
+
+                    const auto* const bytes = (const u8*) inMemory;
+                    u64 hash = FNV_OFFSET_BASIS;
+
+                    for (usize i = 0; i < inSize; ++i) {
+                        hash ^= (u64) bytes[i];
+                        hash *= FNV_PRIME;
+                    }
+
+                    return hash;
                 }
             }
         }
@@ -339,7 +355,6 @@ namespace Catelier::src::architecture::imp {
         usize elementSize;
         usize elementChunkSize;
         usize discardBufferSize;
-        bool (*elementEquals)(const void*, const void*);
         u64 propagationPollingIntervalMs;
         u64 propagationBackoffIntervalMs;
 
@@ -498,8 +513,7 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_construct(
         const usize inElementSize, const usize inElementChunkSize, const usize inDiscardBufferSize,
-        const IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*),
-        bool (*inElementEquals)(const void*, const void*)
+        const IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)
     ) -> IMPList* {
         using namespace foundation::primitive;
         using namespace foundation::concurrency;
@@ -521,7 +535,6 @@ namespace Catelier::src::architecture::imp {
         self->discardBufferSize = inDiscardBufferSize;
         Atomic64_store(&self->propagationPollingIntervalMs, Internal::DEFAULT_PROPAGATION_POLLING_INTERVAL_MS, MemoryOrder::RELAXED);
         Atomic64_store(&self->propagationBackoffIntervalMs, Internal::DEFAULT_PROPAGATION_BACKOFF_INTERVAL_MS, MemoryOrder::RELAXED);
-        self->elementEquals = inElementEquals;
 
         self->elementSortingStrategy = inElementSortingStrategy;
         self->elementSortingComparator = inElementSortingComparator;
@@ -690,7 +703,7 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
-        auto* const newSelf = IMPList_construct(self->elementSize, self->elementChunkSize, self->discardBufferSize, self->elementSortingStrategy, self->elementSortingComparator, self->elementEquals);
+        auto* const newSelf = IMPList_construct(self->elementSize, self->elementChunkSize, self->discardBufferSize, self->elementSortingStrategy, self->elementSortingComparator);
         if (!newSelf) {
             return nullptr;
         }
@@ -1278,7 +1291,7 @@ namespace Catelier::src::architecture::imp {
                         }
 
                         const void* const candidateElement = currentChunk->elements + (i * self->elementSize);
-                        if (self->elementEquals ? self->elementEquals(candidateElement, inElement) : (memcmp(candidateElement, inElement, self->elementSize) == 0)) {
+                        if (memcmp(candidateElement, inElement, self->elementSize) == 0) {
                             Atomic8_store((u8*) &currentChunk->elementStates[i], ElementChunk::ElementState::TOMBSTONE, MemoryOrder::RELAXED);
                             chunkRemoved = true;
                         }
@@ -1310,7 +1323,7 @@ namespace Catelier::src::architecture::imp {
                         }
 
                         const void* const candidateElement = sealedChunk->elements + i * self->elementSize;
-                        if (self->elementEquals ? self->elementEquals(candidateElement, inElement) : (memcmp(candidateElement, inElement, self->elementSize) == 0)) {
+                        if (memcmp(candidateElement, inElement, self->elementSize) == 0) {
                             Atomic8_store((u8*) &sealedChunk->elementStates[i], ElementChunk::ElementState::TOMBSTONE, MemoryOrder::RELAXED);
                             chunkRemoved = true;
                         }
@@ -1473,7 +1486,7 @@ namespace Catelier::src::architecture::imp {
 
                         for (usize j = 0; j < inElementCount; ++j) {
                             const void* const target = ((const u8*) inElements) + j * self->elementSize;
-                            if (self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0)) {
+                            if (memcmp(candidateElement, target, self->elementSize) == 0) {
                                 isFound = true;
                                 break;
                             }
@@ -1516,7 +1529,7 @@ namespace Catelier::src::architecture::imp {
 
                         for (usize j = 0; j < inElementCount; ++j) {
                             const void* const target = (const u8*) inElements + j * self->elementSize;
-                            if (self->elementEquals ? self->elementEquals(candidateElement, target) : (memcmp(candidateElement, target, self->elementSize) == 0)) {
+                            if (memcmp(candidateElement, target, self->elementSize) == 0) {
                                 isFound = true;
                                 break;
                             }
@@ -1855,7 +1868,6 @@ namespace Catelier::src::architecture::imp {
 
         const auto elementSortingStrategy = self->elementSortingStrategy;
         const auto elementSortingComparator = self->elementSortingComparator;
-        const auto elementEquals = self->elementEquals;
 
         const usize elementSize = self->elementSize;
         const usize spanCount = span->count;
@@ -1879,7 +1891,7 @@ namespace Catelier::src::architecture::imp {
                     break;
                 }
 
-                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
                 if (isMatch) {
                     return cursor;
                 }
@@ -1892,7 +1904,7 @@ namespace Catelier::src::architecture::imp {
 
         const u8* cursor = spanElements;
         for (usize i = 0; i < spanCount; ++i) {
-            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+            const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
             if (isMatch) {
                 return cursor;
             }
@@ -1914,7 +1926,6 @@ namespace Catelier::src::architecture::imp {
 
         const auto elementSortingStrategy = self->elementSortingStrategy;
         const auto elementSortingComparator = self->elementSortingComparator;
-        const auto elementEquals = self->elementEquals;
 
         const usize elementSize = self->elementSize;
         const usize spanCount = span->count;
@@ -1938,7 +1949,7 @@ namespace Catelier::src::architecture::imp {
                     break;
                 }
 
-                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
                 if (isMatch) {
                     return true;
                 }
@@ -1951,7 +1962,7 @@ namespace Catelier::src::architecture::imp {
 
         const u8* cursor = spanElements;
         for (usize i = 0; i < spanCount; ++i) {
-            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+            const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
             if (isMatch) {
                 return true;
             }
@@ -1981,7 +1992,6 @@ namespace Catelier::src::architecture::imp {
 
         const auto elementSortingStrategy = self->elementSortingStrategy;
         const auto elementSortingComparator = self->elementSortingComparator;
-        const auto elementEquals = self->elementEquals;
 
         const usize elementSize = self->elementSize;
         const usize spanCount = span->count;
@@ -2011,7 +2021,7 @@ namespace Catelier::src::architecture::imp {
                         break;
                     }
 
-                    const bool isMatch = elementEquals ? elementEquals(cursor, target) : (memcmp(cursor, target, elementSize) == 0);
+                    const bool isMatch = memcmp(cursor, target, elementSize) == 0;
                     if (isMatch) {
                         isFound = true;
                         break;
@@ -2034,7 +2044,7 @@ namespace Catelier::src::architecture::imp {
             bool isFound = false;
             const u8* cursor = spanElements;
             for (usize i = 0; i < spanCount; ++i) {
-                const bool isMatch = elementEquals ? elementEquals(cursor, target) : (memcmp(cursor, target, elementSize) == 0);
+                const bool isMatch = memcmp(cursor, target, elementSize) == 0;
                 if (isMatch) {
                     isFound = true;
                     break;
@@ -2062,7 +2072,6 @@ namespace Catelier::src::architecture::imp {
 
         const auto elementSortingStrategy = self->elementSortingStrategy;
         const auto elementSortingComparator = self->elementSortingComparator;
-        const auto elementEquals = self->elementEquals;
 
         const usize elementSize = self->elementSize;
         const usize spanCount = span->count;
@@ -2086,7 +2095,7 @@ namespace Catelier::src::architecture::imp {
                     break;
                 }
 
-                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
                 if (isMatch) {
                     return (ssize) i;
                 }
@@ -2099,7 +2108,7 @@ namespace Catelier::src::architecture::imp {
 
         const u8* cursor = spanElements;
         for (usize i = 0; i < spanCount; ++i) {
-            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+            const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
             if (isMatch) {
                 return (ssize) i;
             }
@@ -2121,7 +2130,6 @@ namespace Catelier::src::architecture::imp {
 
         const auto elementSortingStrategy = self->elementSortingStrategy;
         const auto elementSortingComparator = self->elementSortingComparator;
-        const auto elementEquals = self->elementEquals;
 
         const usize elementSize = self->elementSize;
         const usize spanCount = span->count;
@@ -2146,7 +2154,7 @@ namespace Catelier::src::architecture::imp {
                     break;
                 }
 
-                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
                 if (isMatch) {
                     lastIndex = (ssize) i;
                 }
@@ -2162,7 +2170,7 @@ namespace Catelier::src::architecture::imp {
             i--;
 
             const u8* const cursor = spanElements + i * elementSize;
-            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+            const bool isMatch = memcmp(cursor, inElement, elementSize) == 0;
             if (isMatch) {
                 return (ssize) i;
             }
@@ -2613,9 +2621,10 @@ namespace Catelier::src::architecture::imp {
 
         u64* hashKeys = nullptr;
         u8* hashOccupied = nullptr;
+        const u8** hashPointers = nullptr;
         usize hashTableSize = 0;
 
-        if (discardElements != nullptr && discardCount > 0 && self->elementEquals == nullptr && self->elementSize <= 8) {
+        if (discardElements != nullptr && discardCount > Internal::DISCARD_LINEAR_THRESHOLD) {
             hashTableSize = 16;
             while (hashTableSize < discardCount * 2) {
                 hashTableSize <<= 1;
@@ -2623,18 +2632,22 @@ namespace Catelier::src::architecture::imp {
 
             hashKeys = (u64*) calloc(hashTableSize, sizeof(u64));
             hashOccupied = (u8*) calloc(hashTableSize, sizeof(u8));
+            hashPointers = (const u8**) calloc(hashTableSize, sizeof(const u8*));
 
-            if (hashKeys != nullptr && hashOccupied != nullptr) {
+            if (hashKeys != nullptr && hashOccupied != nullptr && hashPointers != nullptr) {
                 u64* const localHashKeys = hashKeys;
                 u8* const localHashOccupied = hashOccupied;
+                const u8** const localHashPointers = hashPointers;
+                const usize elementSize = self->elementSize;
 
                 for (usize i = 0; i < discardCount; ++i) {
-                    u64 elementKey = 0;
-                    memcpy(&elementKey, discardElements + i * self->elementSize, self->elementSize);
+                    const u8* const discardElementPtr = discardElements + i * elementSize;
+                    const u64 elementKey = Internal::fnv1aHash64(discardElementPtr, elementSize);
 
                     usize hashSlotIndex = Internal::hashElementKey(elementKey) & (hashTableSize - 1);
                     while (localHashOccupied[hashSlotIndex]) {
-                        if (localHashKeys[hashSlotIndex] == elementKey) {
+                        if (localHashKeys[hashSlotIndex] == elementKey
+                            && memcmp(localHashPointers[hashSlotIndex], discardElementPtr, elementSize) == 0) {
                             break;
                         }
 
@@ -2643,6 +2656,7 @@ namespace Catelier::src::architecture::imp {
 
                     localHashKeys[hashSlotIndex] = elementKey;
                     localHashOccupied[hashSlotIndex] = 1;
+                    localHashPointers[hashSlotIndex] = discardElementPtr;
                 }
             }
         }
@@ -2676,6 +2690,7 @@ namespace Catelier::src::architecture::imp {
                 if (!newSpan) {
                     free(hashKeys);
                     free(hashOccupied);
+                    free(hashPointers);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
@@ -2698,6 +2713,7 @@ namespace Catelier::src::architecture::imp {
 
                     free(hashKeys);
                     free(hashOccupied);
+                    free(hashPointers);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
@@ -2761,16 +2777,18 @@ namespace Catelier::src::architecture::imp {
 
                         bool isDiscarded = false;
                         if (needDiscardCheck) {
-                            if (hashKeys != nullptr && hashOccupied != nullptr) {
+                            if (hashKeys != nullptr && hashOccupied != nullptr && hashPointers != nullptr) {
                                 u64* const localHashKeys = hashKeys;
                                 u8* const localHashOccupied = hashOccupied;
+                                const u8** const localHashPointers = hashPointers;
+                                const usize elementSize = self->elementSize;
 
-                                u64 elementKey = 0;
-                                memcpy(&elementKey, ptr, self->elementSize);
+                                const u64 elementKey = Internal::fnv1aHash64(ptr, elementSize);
 
                                 usize hashSlotIndex = Internal::hashElementKey(elementKey) & (hashTableSize - 1);
                                 while (localHashOccupied[hashSlotIndex]) {
-                                    if (localHashKeys[hashSlotIndex] == elementKey) {
+                                    if (localHashKeys[hashSlotIndex] == elementKey
+                                        && memcmp(localHashPointers[hashSlotIndex], ptr, elementSize) == 0) {
                                         isDiscarded = true;
                                         break;
                                     }
@@ -2779,7 +2797,7 @@ namespace Catelier::src::architecture::imp {
                                 }
                             } else {
                                 for (usize k = 0; k < discardCount; ++k) {
-                                    if (self->elementEquals ? self->elementEquals(ptr, discardElements + k * self->elementSize) : (memcmp(ptr, discardElements + k * self->elementSize, self->elementSize) == 0)) {
+                                    if (memcmp(ptr, discardElements + k * self->elementSize, self->elementSize) == 0) {
                                         isDiscarded = true;
                                         break;
                                     }
@@ -2860,6 +2878,7 @@ namespace Catelier::src::architecture::imp {
 
         free(hashKeys);
         free(hashOccupied);
+        free(hashPointers);
 
         if (isDiscardAll) {
             AtomicBool_store(&self->isDiscardAllSignaled, false, MemoryOrder::RELEASE);

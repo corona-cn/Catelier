@@ -12,8 +12,7 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_construct(
         usize inElementSize, usize inElementChunkSize, usize inDiscardBufferSize,
-        IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*),
-        bool (*inElementEquals)(const void*, const void*)
+        IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)
     ) -> IMPList*;
     auto IMPList_destruct(IMPList* self) -> bool;
     auto IMPList_copy(const IMPList* self) -> IMPList*;

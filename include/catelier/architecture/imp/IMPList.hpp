@@ -45,8 +45,8 @@ namespace Catelier::include::architecture::imp {
                 return this->handle != nullptr;
             }
 
-            explicit IMPList(const usize inElementChunkSize = 1024, const usize inDiscardBufferSize = 1024, bool (*inElementEquals)(const void*, const void*) = nullptr) {
-                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inElementChunkSize, inDiscardBufferSize, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr, inElementEquals);
+            explicit IMPList(const usize inElementChunkSize = 1024, const usize inDiscardBufferSize = 1024) {
+                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inElementChunkSize, inDiscardBufferSize, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr);
             }
             ~IMPList() {
                 if (this->handle) {
