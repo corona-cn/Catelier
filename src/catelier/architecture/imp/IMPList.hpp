@@ -10,12 +10,13 @@ namespace Catelier::src::architecture::imp {
         DESCENDING,
     } IMPList_ElementSortingStrategy;
 
-    auto IMPList_construct(usize inElementSize, usize inChunkSize, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList*;
+    auto IMPList_construct(usize inElementSize, usize inElementChunkSize, usize inDiscardBufferSize, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList*;
     auto IMPList_destruct(IMPList* self) -> bool;
     auto IMPList_copy(const IMPList* self) -> IMPList*;
 
-    auto IMPList_configurePropagation(IMPList* self, u64 inPropagationDelayMs) -> bool;
     auto IMPList_configureRetirement(IMPList* self, usize inRetiredPresentElementsCapacity) -> bool;
+    auto IMPList_configurePropagation(IMPList* self, u64 inPollingIntervalMs, u64 inBackoffIntervalMs) -> bool;
+    auto IMPList_configureMaintenanceMerging(IMPList* self, bool inIsMaintenanceMergingEnabled) -> bool;
 
     auto IMPList_presentElementsSpan(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
     auto IMPList_presentElementsSpanCopy(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
@@ -38,6 +39,8 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_removeExcept(IMPList* self, const void* inElements, usize inElementCount) -> bool;
     auto IMPList_removeExceptIf(IMPList* self, bool (*inPredicate)(const void*, void*), void* inPredicateContext) -> bool;
     auto IMPList_removeAll(IMPList* self) -> bool;
+
+    auto IMPList_discard(IMPList* self, const void* inElement) -> bool;
 
     auto IMPList_find(const IMPList* self, const void* inElement) -> const void*;
     auto IMPList_contains(const IMPList* self, const void* inElement) -> bool;

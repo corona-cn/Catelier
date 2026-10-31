@@ -45,8 +45,8 @@ namespace Catelier::include::architecture::imp {
                 return this->handle != nullptr;
             }
 
-            explicit IMPList(const usize inChunkSize = 1024, bool (*inElementEquals)(const void*, const void*) = nullptr) {
-                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inChunkSize, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr, inElementEquals);
+            explicit IMPList(const usize inElementChunkSize = 1024, const usize inDiscardBufferSize = 1024, bool (*inElementEquals)(const void*, const void*) = nullptr) {
+                this->handle = src::architecture::imp::IMPList_construct(sizeof(ElementType), inElementChunkSize, inDiscardBufferSize, src::architecture::imp::IMPList_ElementSortingStrategy::UNORDERED, nullptr, inElementEquals);
             }
             ~IMPList() {
                 if (this->handle) {
@@ -96,14 +96,14 @@ namespace Catelier::include::architecture::imp {
                 return *this;
             }
 
-            auto configurePropagation(const u64 inPropagationDelayMs) -> bool {
+            auto configurePropagation(const u64 inPollingIntervalMs, const u64 inBackoffIntervalMs) -> bool {
                 assert(this->handle != nullptr);
 
                 if (!this->handle) {
                     return false;
                 }
 
-                return src::architecture::imp::IMPList_configurePropagation(this->handle, inPropagationDelayMs);
+                return src::architecture::imp::IMPList_configurePropagation(this->handle, inPollingIntervalMs, inBackoffIntervalMs);
             }
             auto configureRetirement(const usize inRetiredPresentElementsCapacity) -> bool {
                 assert(this->handle != nullptr);
@@ -113,6 +113,15 @@ namespace Catelier::include::architecture::imp {
                 }
 
                 return src::architecture::imp::IMPList_configureRetirement(this->handle, inRetiredPresentElementsCapacity);
+            }
+            auto configureMaintenanceMerging(const bool inIsMaintenanceMergingEnabled) -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_configureMaintenanceMerging(this->handle, inIsMaintenanceMergingEnabled);
             }
 
             auto presentElementsSpan(const ElementType*& outElements, usize& outElementCount) const -> bool {
@@ -291,6 +300,16 @@ namespace Catelier::include::architecture::imp {
                 }
 
                 return src::architecture::imp::IMPList_removeAll(this->handle);
+            }
+
+            auto discard(const ElementType& inElement) -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_discard(this->handle, &inElement);
             }
 
             auto begin() const -> ConstIterator {
