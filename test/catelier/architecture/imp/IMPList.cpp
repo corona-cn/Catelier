@@ -740,7 +740,7 @@ namespace Catelier::test::architecture::imp {
 
                 std::vector<std::thread> threads;
                 for (int t = 0; t < kThreadCount; ++t) {
-                    threads.emplace_back([&list, t, kElementsPerThread]() {
+                    threads.emplace_back([&list, t, kElementsPerThread] {
                         for (int i = 0; i < kElementsPerThread; ++i) {
                             list.add(t * kElementsPerThread + i);
                         }

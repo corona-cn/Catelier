@@ -10,7 +10,11 @@ namespace Catelier::src::architecture::imp {
         DESCENDING,
     } IMPList_ElementSortingStrategy;
 
-    auto IMPList_construct(usize inElementSize, usize inElementChunkSize, usize inDiscardBufferSize, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*), bool (*inElementEquals)(const void*, const void*)) -> IMPList*;
+    auto IMPList_construct(
+        usize inElementSize, usize inElementChunkSize, usize inDiscardBufferSize,
+        IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*),
+        bool (*inElementEquals)(const void*, const void*)
+    ) -> IMPList*;
     auto IMPList_destruct(IMPList* self) -> bool;
     auto IMPList_copy(const IMPList* self) -> IMPList*;
 
@@ -50,7 +54,10 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_isEmpty(const IMPList* self) -> bool;
     auto IMPList_isNotEmpty(const IMPList* self) -> bool;
 
-    auto IMPList_sort(IMPList* self, IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)) -> bool;
+    auto IMPList_sort(
+        IMPList* self,
+        IMPList_ElementSortingStrategy inElementSortingStrategy, i32 (*inElementSortingComparator)(const void*, const void*)
+    ) -> bool;
 
     auto IMPList_tryMerging(IMPList* self) -> bool;
     auto IMPList_awaitMerging(IMPList* self) -> bool;
