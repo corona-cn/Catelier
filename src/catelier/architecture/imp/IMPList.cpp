@@ -1730,15 +1730,50 @@ namespace Catelier::src::architecture::imp {
         }
 
         const auto* const span = (const IMPList::PresentElementsSpan*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElementsSpan, foundation::primitive::MemoryOrder::ACQUIRE);
-
         if (!span || span->count == 0) {
             return nullptr;
         }
 
+        const auto elementSortingStrategy = self->elementSortingStrategy;
+        const auto elementSortingComparator = self->elementSortingComparator;
+        const auto elementEquals = self->elementEquals;
+
         const usize elementSize = self->elementSize;
-        const u8* cursor = span->elements;
-        for (usize i = 0; i < span->count; ++i) {
-            const bool isMatch = self->elementEquals ? self->elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+        const usize spanCount = span->count;
+        const u8* const spanElements = span->elements;
+
+        if (elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && elementSortingComparator != nullptr) {
+            usize lower = 0;
+            usize upper = spanCount;
+            while (lower < upper) {
+                const usize mid = lower + (upper - lower) / 2;
+                if (elementSortingComparator(spanElements + mid * elementSize, inElement) < 0) {
+                    lower = mid + 1;
+                } else {
+                    upper = mid;
+                }
+            }
+
+            const u8* cursor = spanElements + lower * elementSize;
+            for (usize i = lower; i < spanCount; ++i) {
+                if (elementSortingComparator(cursor, inElement) != 0) {
+                    break;
+                }
+
+                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                if (isMatch) {
+                    return cursor;
+                }
+
+                cursor += elementSize;
+            }
+
+            return nullptr;
+        }
+
+        const u8* cursor = spanElements;
+        for (usize i = 0; i < spanCount; ++i) {
+            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
             if (isMatch) {
                 return cursor;
             }
@@ -1754,15 +1789,50 @@ namespace Catelier::src::architecture::imp {
         }
 
         const auto* const span = (const IMPList::PresentElementsSpan*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElementsSpan, foundation::primitive::MemoryOrder::ACQUIRE);
-
         if (!span || span->count == 0) {
             return false;
         }
 
+        const auto elementSortingStrategy = self->elementSortingStrategy;
+        const auto elementSortingComparator = self->elementSortingComparator;
+        const auto elementEquals = self->elementEquals;
+
         const usize elementSize = self->elementSize;
-        const u8* cursor = span->elements;
-        for (usize i = 0; i < span->count; ++i) {
-            const bool isMatch = self->elementEquals ? self->elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+        const usize spanCount = span->count;
+        const u8* const spanElements = span->elements;
+
+        if (elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && elementSortingComparator != nullptr) {
+            usize lower = 0;
+            usize upper = spanCount;
+            while (lower < upper) {
+                const usize mid = lower + (upper - lower) / 2;
+                if (elementSortingComparator(spanElements + mid * elementSize, inElement) < 0) {
+                    lower = mid + 1;
+                } else {
+                    upper = mid;
+                }
+            }
+
+            const u8* cursor = spanElements + lower * elementSize;
+            for (usize i = lower; i < spanCount; ++i) {
+                if (elementSortingComparator(cursor, inElement) != 0) {
+                    break;
+                }
+
+                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                if (isMatch) {
+                    return true;
+                }
+
+                cursor += elementSize;
+            }
+
+            return false;
+        }
+
+        const u8* cursor = spanElements;
+        for (usize i = 0; i < spanCount; ++i) {
+            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
             if (isMatch) {
                 return true;
             }
@@ -1786,21 +1856,66 @@ namespace Catelier::src::architecture::imp {
         }
 
         const auto* const span = (const IMPList::PresentElementsSpan*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElementsSpan, foundation::primitive::MemoryOrder::ACQUIRE);
-
         if (!span || span->count == 0) {
             return false;
         }
 
+        const auto elementSortingStrategy = self->elementSortingStrategy;
+        const auto elementSortingComparator = self->elementSortingComparator;
+        const auto elementEquals = self->elementEquals;
+
         const usize elementSize = self->elementSize;
-        const u8* const targets = (const u8*) inElements;
+        const usize spanCount = span->count;
+        const u8* const spanElements = span->elements;
+
+        const auto* const targets = (const u8*) inElements;
+
+        if (elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && elementSortingComparator != nullptr) {
+            for (usize t = 0; t < inElementCount; ++t) {
+                const void* const target = targets + t * elementSize;
+
+                usize lower = 0;
+                usize upper = spanCount;
+                while (lower < upper) {
+                    const usize mid = lower + (upper - lower) / 2;
+                    if (elementSortingComparator(spanElements + mid * elementSize, target) < 0) {
+                        lower = mid + 1;
+                    } else {
+                        upper = mid;
+                    }
+                }
+
+                bool isFound = false;
+                const u8* cursor = spanElements + lower * elementSize;
+                for (usize i = lower; i < spanCount; ++i) {
+                    if (elementSortingComparator(cursor, target) != 0) {
+                        break;
+                    }
+
+                    const bool isMatch = elementEquals ? elementEquals(cursor, target) : (memcmp(cursor, target, elementSize) == 0);
+                    if (isMatch) {
+                        isFound = true;
+                        break;
+                    }
+
+                    cursor += elementSize;
+                }
+
+                if (!isFound) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         for (usize t = 0; t < inElementCount; ++t) {
             const void* const target = targets + t * elementSize;
 
             bool isFound = false;
-
-            const u8* cursor = span->elements;
-            for (usize i = 0; i < span->count; ++i) {
-                const bool isMatch = self->elementEquals ? self->elementEquals(cursor, target) : (memcmp(cursor, target, elementSize) == 0);
+            const u8* cursor = spanElements;
+            for (usize i = 0; i < spanCount; ++i) {
+                const bool isMatch = elementEquals ? elementEquals(cursor, target) : (memcmp(cursor, target, elementSize) == 0);
                 if (isMatch) {
                     isFound = true;
                     break;
@@ -1822,15 +1937,50 @@ namespace Catelier::src::architecture::imp {
         }
 
         const auto* const span = (const IMPList::PresentElementsSpan*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElementsSpan, foundation::primitive::MemoryOrder::ACQUIRE);
-
         if (!span || span->count == 0) {
             return -1;
         }
 
+        const auto elementSortingStrategy = self->elementSortingStrategy;
+        const auto elementSortingComparator = self->elementSortingComparator;
+        const auto elementEquals = self->elementEquals;
+
         const usize elementSize = self->elementSize;
-        const u8* cursor = span->elements;
-        for (usize i = 0; i < span->count; ++i) {
-            const bool isMatch = self->elementEquals ? self->elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+        const usize spanCount = span->count;
+        const u8* const spanElements = span->elements;
+
+        if (elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && elementSortingComparator != nullptr) {
+            usize lower = 0;
+            usize upper = spanCount;
+            while (lower < upper) {
+                const usize mid = lower + (upper - lower) / 2;
+                if (elementSortingComparator(spanElements + mid * elementSize, inElement) < 0) {
+                    lower = mid + 1;
+                } else {
+                    upper = mid;
+                }
+            }
+
+            const u8* cursor = spanElements + lower * elementSize;
+            for (usize i = lower; i < spanCount; ++i) {
+                if (elementSortingComparator(cursor, inElement) != 0) {
+                    break;
+                }
+
+                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                if (isMatch) {
+                    return (ssize) i;
+                }
+
+                cursor += elementSize;
+            }
+
+            return -1;
+        }
+
+        const u8* cursor = spanElements;
+        for (usize i = 0; i < spanCount; ++i) {
+            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
             if (isMatch) {
                 return (ssize) i;
             }
@@ -1846,18 +1996,54 @@ namespace Catelier::src::architecture::imp {
         }
 
         const auto* const span = (const IMPList::PresentElementsSpan*) foundation::primitive::AtomicPtr_load((void* const*) &self->presentElementsSpan, foundation::primitive::MemoryOrder::ACQUIRE);
-
         if (!span || span->count == 0) {
             return -1;
         }
 
+        const auto elementSortingStrategy = self->elementSortingStrategy;
+        const auto elementSortingComparator = self->elementSortingComparator;
+        const auto elementEquals = self->elementEquals;
+
         const usize elementSize = self->elementSize;
-        usize i = span->count;
+        const usize spanCount = span->count;
+        const u8* const spanElements = span->elements;
+
+        if (elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && elementSortingComparator != nullptr) {
+            usize lower = 0;
+            usize upper = spanCount;
+            while (lower < upper) {
+                const usize mid = lower + (upper - lower) / 2;
+                if (elementSortingComparator(spanElements + mid * elementSize, inElement) < 0) {
+                    lower = mid + 1;
+                } else {
+                    upper = mid;
+                }
+            }
+
+            ssize lastIndex = -1;
+            const u8* cursor = spanElements + lower * elementSize;
+            for (usize i = lower; i < spanCount; ++i) {
+                if (elementSortingComparator(cursor, inElement) != 0) {
+                    break;
+                }
+
+                const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+                if (isMatch) {
+                    lastIndex = (ssize) i;
+                }
+
+                cursor += elementSize;
+            }
+
+            return lastIndex;
+        }
+
+        usize i = spanCount;
         while (i > 0) {
             i--;
 
-            const u8* const cursor = span->elements + i * elementSize;
-            const bool isMatch = self->elementEquals ? self->elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
+            const u8* const cursor = spanElements + i * elementSize;
+            const bool isMatch = elementEquals ? elementEquals(cursor, inElement) : (memcmp(cursor, inElement, elementSize) == 0);
             if (isMatch) {
                 return (ssize) i;
             }

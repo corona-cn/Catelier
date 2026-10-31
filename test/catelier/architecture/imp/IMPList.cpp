@@ -779,6 +779,104 @@ namespace Catelier::test::architecture::imp {
                 LOG("naturalSortDescending → 降序：", desc ? "PASS" : "FAIL");
             }
 
+            LOG("--- [正确性] find / contains / indexOf 查找（UNORDERED 线性路径） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024, intEquals);
+                for (int i = 0; i < 100; ++i) {
+                    list.add(i * 2);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                const int* const found = list.find(50);
+                LOG("find(50) = ", found ? "命中" : "未命中", "（应为命中）");
+                LOG("  *found = ", found ? *found : -1, "（应为 50）");
+
+                LOG("find(51) = ", list.find(51) ? "命中" : "未命中", "（应为未命中）");
+                LOG("find(0) = ", list.find(0) ? "命中" : "未命中", "（首元素，应为命中）");
+                LOG("find(198) = ", list.find(198) ? "命中" : "未命中", "（尾元素，应为命中）");
+                LOG("find(200) = ", list.find(200) ? "命中" : "未命中", "（越界，应为未命中）");
+
+                LOG("contains(50) = ", list.contains(50), "（应为 1）");
+                LOG("contains(51) = ", list.contains(51), "（应为 0）");
+
+                LOG("firstIndexOf(50) = ", list.firstIndexOf(50), "（应为 25）");
+                LOG("lastIndexOf(50) = ", list.lastIndexOf(50), "（应为 25）");
+                LOG("firstIndexOf(1) = ", list.firstIndexOf(1), "（应为 -1）");
+                LOG("lastIndexOf(1) = ", list.lastIndexOf(1), "（应为 -1）");
+            }
+
+            LOG("--- [正确性] find / contains / indexOf 查找（ASCENDING 二分路径，与线性路径行为一致） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024, intEquals);
+                for (int i = 0; i < 100; ++i) {
+                    list.add(i * 2);
+                }
+                list.naturalSort();
+                list.awaitMerging();
+
+                const int* const found = list.find(50);
+                LOG("find(50) = ", found ? "命中" : "未命中", "（应为命中）");
+                LOG("  *found = ", found ? *found : -1, "（应为 50）");
+
+                LOG("find(51) = ", list.find(51) ? "命中" : "未命中", "（应为未命中）");
+                LOG("find(0) = ", list.find(0) ? "命中" : "未命中", "（首元素，应为命中）");
+                LOG("find(198) = ", list.find(198) ? "命中" : "未命中", "（尾元素，应为命中）");
+                LOG("find(200) = ", list.find(200) ? "命中" : "未命中", "（越界，应为未命中）");
+                LOG("find(-2) = ", list.find(-2) ? "命中" : "未命中", "（越界，应为未命中）");
+
+                LOG("contains(50) = ", list.contains(50), "（应为 1）");
+                LOG("contains(51) = ", list.contains(51), "（应为 0）");
+
+                LOG("firstIndexOf(50) = ", list.firstIndexOf(50), "（应为 25）");
+                LOG("lastIndexOf(50) = ", list.lastIndexOf(50), "（应为 25）");
+                LOG("firstIndexOf(1) = ", list.firstIndexOf(1), "（应为 -1）");
+                LOG("lastIndexOf(1) = ", list.lastIndexOf(1), "（应为 -1）");
+            }
+
+            LOG("--- [正确性] 重复元素下 firstIndexOf / lastIndexOf（二分等价区间） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(16, 1024, intEquals);
+                for (int i = 0; i < 10; ++i) {
+                    list.add(i / 3);
+                }
+                list.naturalSort();
+                list.awaitMerging();
+
+                LOG("排序后 present = ", list.presentElementCount(), "（应为 10）");
+                LOG("firstIndexOf(0) = ", list.firstIndexOf(0), "（应为 0）");
+                LOG("lastIndexOf(0) = ", list.lastIndexOf(0), "（应为 2）");
+                LOG("firstIndexOf(1) = ", list.firstIndexOf(1), "（应为 3）");
+                LOG("lastIndexOf(1) = ", list.lastIndexOf(1), "（应为 5）");
+                LOG("firstIndexOf(2) = ", list.firstIndexOf(2), "（应为 6）");
+                LOG("lastIndexOf(2) = ", list.lastIndexOf(2), "（应为 8）");
+                LOG("firstIndexOf(3) = ", list.firstIndexOf(3), "（应为 9）");
+                LOG("lastIndexOf(3) = ", list.lastIndexOf(3), "（应为 9）");
+                LOG("contains(4) = ", list.contains(4), "（应为 0）");
+            }
+
+            LOG("--- [正确性] containsAll 语义（全命中 / 部分命中 / 全未命中 / 重复 / 空 / NULL） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(16, 1024, intEquals);
+                for (int i = 0; i < 10; ++i) {
+                    list.add(i);
+                }
+                list.naturalSort();
+                list.awaitMerging();
+
+                const int allHit[] = { 0, 5, 9 };
+                const int partialMiss[] = { 0, 5, 10 };
+                const int allMiss[] = { 100, 200, 300 };
+                const int duplicates[] = { 5, 5, 5 };
+
+                LOG("containsAll(all hit) = ", list.containsAll(allHit, 3), "（应为 1）");
+                LOG("containsAll(partial miss) = ", list.containsAll(partialMiss, 3), "（应为 0）");
+                LOG("containsAll(all miss) = ", list.containsAll(allMiss, 3), "（应为 0）");
+                LOG("containsAll(duplicates) = ", list.containsAll(duplicates, 3), "（应为 1）");
+                LOG("containsAll(空) = ", list.containsAll(allHit, 0), "（应为 1）");
+                LOG("containsAll(NULL) = ", list.containsAll((const int*) nullptr, 3), "（应为 0）");
+            }
+
             LOG("--- [正确性] awaitMerging 语义 ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(1024, 1024, intEquals);
@@ -1141,6 +1239,250 @@ namespace Catelier::test::architecture::imp {
                 const double mMiss = meanOf(missSamples, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
                 logPerOp("contains（命中）", mHit, 0.0, hitSamples[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
                 logPerOp("contains（未命中）", mMiss, 0.0, missSamples[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+            }
+
+            LOG("--- [性能] contains 延迟（UNORDERED 线性 vs ASCENDING 二分，1000 元素） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kElements = 1000;
+                constexpr u32 kIters = 100000;
+
+                auto unorderedList = IMPList<int>(1024, 1024, intEquals);
+                auto sortedList = IMPList<int>(1024, 1024, intEquals);
+                for (u32 i = 0; i < kElements; ++i) {
+                    unorderedList.add((int) i);
+                    sortedList.add((int) i);
+                }
+                unorderedList.tryMerging();
+                unorderedList.awaitMerging();
+                sortedList.naturalSort();
+                sortedList.awaitMerging();
+
+                static u64 hitUnordered[BENCH_TRIALS];
+                static u64 hitSorted[BENCH_TRIALS];
+                static u64 missUnordered[BENCH_TRIALS];
+                static u64 missSorted[BENCH_TRIALS];
+                QpcTimer timer;
+
+                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
+                    timer.start();
+                    u32 hitsU = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (unorderedList.contains((int) (i % kElements))) {
+                            hitsU++;
+                        }
+                    }
+                    hitUnordered[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    u32 hitsS = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (sortedList.contains((int) (i % kElements))) {
+                            hitsS++;
+                        }
+                    }
+                    hitSorted[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    u32 missesU = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (!unorderedList.contains((int) (10000 + i))) {
+                            missesU++;
+                        }
+                    }
+                    missUnordered[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    u32 missesS = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (!sortedList.contains((int) (10000 + i))) {
+                            missesS++;
+                        }
+                    }
+                    missSorted[t] = timer.stopNs() * 100 / kIters;
+
+                    if (hitsU + hitsS + missesU + missesS == 0xDEADBEEF) {
+                        LOG("impossible");
+                    }
+                }
+
+                sortU64(hitUnordered, BENCH_TRIALS);
+                sortU64(hitSorted, BENCH_TRIALS);
+                sortU64(missUnordered, BENCH_TRIALS);
+                sortU64(missSorted, BENCH_TRIALS);
+
+                const double mHU = meanOf(hitUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mHS = meanOf(hitSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mMU = meanOf(missUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mMS = meanOf(missSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+
+                logPerOp("contains 命中（UNORDERED 线性）", mHU, 0.0, hitUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("contains 命中（ASCENDING 二分）", mHS, 0.0, hitSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("contains 未命中（UNORDERED 线性）", mMU, 0.0, missUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("contains 未命中（ASCENDING 二分）", mMS, 0.0, missSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+
+                LOG("加速比（命中）= ", mHS > 0.0 ? mHU / mHS : 0.0, "x，加速比（未命中）= ", mMS > 0.0 ? mMU / mMS : 0.0, "x");
+            }
+
+            LOG("--- [性能] containsAll 延迟（UNORDERED 线性 vs ASCENDING 二分，1000 元素 × 3 targets） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kElements = 1000;
+                constexpr u32 kIters = 10000;
+
+                auto unorderedList = IMPList<int>(1024, 1024, intEquals);
+                auto sortedList = IMPList<int>(1024, 1024, intEquals);
+                for (u32 i = 0; i < kElements; ++i) {
+                    unorderedList.add((int) i);
+                    sortedList.add((int) i);
+                }
+                unorderedList.tryMerging();
+                unorderedList.awaitMerging();
+                sortedList.naturalSort();
+                sortedList.awaitMerging();
+
+                const int hitTargets[] = { 100, 500, 900 };
+                const int missTargets[] = { 100, 500, 10000 };
+
+                static u64 hitUnordered[BENCH_TRIALS];
+                static u64 hitSorted[BENCH_TRIALS];
+                static u64 missUnordered[BENCH_TRIALS];
+                static u64 missSorted[BENCH_TRIALS];
+                QpcTimer timer;
+
+                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
+                    timer.start();
+                    u32 hitsU = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (unorderedList.containsAll(hitTargets, 3)) {
+                            hitsU++;
+                        }
+                    }
+                    hitUnordered[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    u32 hitsS = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (sortedList.containsAll(hitTargets, 3)) {
+                            hitsS++;
+                        }
+                    }
+                    hitSorted[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    u32 missesU = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (!unorderedList.containsAll(missTargets, 3)) {
+                            missesU++;
+                        }
+                    }
+                    missUnordered[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    u32 missesS = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        if (!sortedList.containsAll(missTargets, 3)) {
+                            missesS++;
+                        }
+                    }
+                    missSorted[t] = timer.stopNs() * 100 / kIters;
+
+                    if (hitsU + hitsS + missesU + missesS == 0xDEADBEEF) {
+                        LOG("impossible");
+                    }
+                }
+
+                sortU64(hitUnordered, BENCH_TRIALS);
+                sortU64(hitSorted, BENCH_TRIALS);
+                sortU64(missUnordered, BENCH_TRIALS);
+                sortU64(missSorted, BENCH_TRIALS);
+
+                const double mHU = meanOf(hitUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mHS = meanOf(hitSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mMU = meanOf(missUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mMS = meanOf(missSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+
+                logPerOp("containsAll 命中（UNORDERED 线性）", mHU, 0.0, hitUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("containsAll 命中（ASCENDING 二分）", mHS, 0.0, hitSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("containsAll 未命中（UNORDERED 线性）", mMU, 0.0, missUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("containsAll 未命中（ASCENDING 二分）", mMS, 0.0, missSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+
+                LOG("加速比（命中）= ", mHS > 0.0 ? mHU / mHS : 0.0, "x，加速比（未命中）= ", mMS > 0.0 ? mMU / mMS : 0.0, "x");
+            }
+
+            LOG("--- [性能] firstIndexOf / lastIndexOf 延迟（重复元素，UNORDERED 线性 vs ASCENDING 二分） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kDistinctValues = 200;
+                constexpr u32 kRepeatPerValue = 5;
+                constexpr u32 kElements = kDistinctValues * kRepeatPerValue;
+                constexpr u32 kIters = 20000;
+
+                auto unorderedList = IMPList<int>(1024, 1024, intEquals);
+                auto sortedList = IMPList<int>(1024, 1024, intEquals);
+                for (u32 i = 0; i < kElements; ++i) {
+                    const int v = (int) (i / kRepeatPerValue);
+                    unorderedList.add(v);
+                    sortedList.add(v);
+                }
+                unorderedList.tryMerging();
+                unorderedList.awaitMerging();
+                sortedList.naturalSort();
+                sortedList.awaitMerging();
+
+                static u64 firstUnordered[BENCH_TRIALS];
+                static u64 firstSorted[BENCH_TRIALS];
+                static u64 lastUnordered[BENCH_TRIALS];
+                static u64 lastSorted[BENCH_TRIALS];
+                QpcTimer timer;
+
+                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
+                    timer.start();
+                    ssize firstSumU = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        firstSumU += unorderedList.firstIndexOf((int) (i % kDistinctValues));
+                    }
+                    firstUnordered[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    ssize firstSumS = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        firstSumS += sortedList.firstIndexOf((int) (i % kDistinctValues));
+                    }
+                    firstSorted[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    ssize lastSumU = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        lastSumU += unorderedList.lastIndexOf((int) (i % kDistinctValues));
+                    }
+                    lastUnordered[t] = timer.stopNs() * 100 / kIters;
+
+                    timer.start();
+                    ssize lastSumS = 0;
+                    for (u32 i = 0; i < kIters; ++i) {
+                        lastSumS += sortedList.lastIndexOf((int) (i % kDistinctValues));
+                    }
+                    lastSorted[t] = timer.stopNs() * 100 / kIters;
+
+                    if (firstSumU + firstSumS + lastSumU + lastSumS == 0xDEADBEEF) {
+                        LOG("impossible");
+                    }
+                }
+
+                sortU64(firstUnordered, BENCH_TRIALS);
+                sortU64(firstSorted, BENCH_TRIALS);
+                sortU64(lastUnordered, BENCH_TRIALS);
+                sortU64(lastSorted, BENCH_TRIALS);
+
+                const double mFU = meanOf(firstUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mFS = meanOf(firstSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mLU = meanOf(lastUnordered, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+                const double mLS = meanOf(lastSorted, BENCH_TRIM, BENCH_TRIALS - BENCH_TRIM) / 100.0;
+
+                logPerOp("firstIndexOf（UNORDERED 线性）", mFU, 0.0, firstUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("firstIndexOf（ASCENDING 二分）", mFS, 0.0, firstSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("lastIndexOf（UNORDERED 线性）", mLU, 0.0, lastUnordered[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+                logPerOp("lastIndexOf（ASCENDING 二分）", mLS, 0.0, lastSorted[BENCH_TRIALS / 2] / 100, BENCH_TRIALS);
+
+                LOG("加速比（firstIndexOf）= ", mFS > 0.0 ? mFU / mFS : 0.0, "x，加速比（lastIndexOf）= ", mLS > 0.0 ? mLU / mLS : 0.0, "x");
             }
 
             LOG("--- [性能] 4 线程并发 add 吞吐（不同规模，检验可扩展性） ---");
