@@ -414,6 +414,8 @@ namespace Catelier::test::architecture::imp {
                 LOG("初始 presentElementCount = ", list.presentElementCount(), "（应为 0）");
                 LOG("初始 ingestElementCount = ", list.ingestElementCount(), "（应为 0）");
                 LOG("初始 mergeElementCount = ", list.mergeElementCount(), "（应为 0）");
+                LOG("初始 compactionCount = ", list.compactionCount(), "（应为 0）");
+                LOG("初始 lastCompactionDurationMs = ", list.lastCompactionDurationMs(), "（应为 0）");
                 LOG("初始 first = ", list.first() == nullptr ? "NULL" : "非 NULL", "（应为 NULL）");
                 LOG("初始 last = ", list.last() == nullptr ? "NULL" : "非 NULL", "（应为 NULL）");
 
@@ -672,6 +674,7 @@ namespace Catelier::test::architecture::imp {
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(64, 1024);
                 list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
                 for (int i = 0; i < 50; ++i) {
                     list.add(i);
@@ -691,6 +694,7 @@ namespace Catelier::test::architecture::imp {
                 LOG("窗口内 add 全部丢弃：", list.presentElementCount() == 0 ? "PASS" : "FAIL");
 
                 list.configureMaintenanceMerging(true);
+                list.configureCompaction(true, 20, 10000);
                 list.add(200);
                 list.awaitMerging();
                 LOG("窗口结束后 add：present = ", list.presentElementCount(), "（应为 1）");
@@ -927,6 +931,248 @@ namespace Catelier::test::architecture::imp {
                 LOG("已合并状态 awaitMerging(1ms) = ", timeoutResult ? "PASS" : "FAIL", "（应为 PASS）");
             }
 
+            LOG("--- [正确性] awaitCompacting 语义 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(1024, 1024);
+                for (int i = 0; i < 100; ++i) {
+                    list.add(i);
+                }
+                list.awaitMerging();
+
+                const bool timeoutResult = list.awaitCompacting(1);
+                LOG("已空闲状态 awaitCompacting(1ms) = ", timeoutResult ? "PASS" : "FAIL", "（应为 PASS）");
+            }
+
+            LOG("--- [正确性] compactionCount 递增 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                LOG("初始 compactionCount = ", list.compactionCount(), "（应为 0）");
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                LOG("remove 后 present = ", list.presentElementCount(), "（应为 5000）");
+                LOG("remove 后 compactionCount = ", list.compactionCount(), "（仍应为 0，未触发 compact）");
+
+                list.tryCompacting();
+
+                LOG("compact 后 compactionCount = ", list.compactionCount(), "（应为 1）");
+                LOG("compact 后 present = ", list.presentElementCount(), "（仍应为 5000，compact 不改变可见元素）");
+            }
+
+            LOG("--- [正确性] compact 后 ingestElementCount 下降（内存收敛验证） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 8000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                const usize before = list.ingestElementCount();
+                LOG("compact 前 ingestElementCount = ", before, "（应接近 10000，含墓碑）");
+
+                list.tryCompacting();
+
+                const usize after = list.ingestElementCount();
+                LOG("compact 后 ingestElementCount = ", after, "（应接近 2000，墓碑已清理）");
+                LOG("内存收敛：", after < before ? "PASS" : "FAIL");
+                LOG("present 不变：", list.presentElementCount() == 2000 ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [正确性] compact 后 add 正常保留 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 4000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                list.tryCompacting();
+
+                const usize beforeAdd = list.presentElementCount();
+                for (int i = 10000; i < 10500; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                LOG("compact 后 add 500 个 → present = ", list.presentElementCount(), "（应为 ", beforeAdd + 500, "）");
+                LOG("add 保留正常：", list.presentElementCount() == beforeAdd + 500 ? "PASS" : "FAIL");
+
+                bool newElementsOk = true;
+                for (int i = 10000; i < 10500; ++i) {
+                    if (!list.contains(i)) {
+                        newElementsOk = false;
+                        break;
+                    }
+                }
+                LOG("新增元素全部保留：", newElementsOk ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [正确性] compact 后 merge 反映清理结果 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 4500; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                list.tryCompacting();
+
+                list.tryMerging();
+                list.awaitMerging();
+
+                bool contentOk = true;
+                for (int i = 4500; i < 5000; ++i) {
+                    if (!list.contains(i)) {
+                        contentOk = false;
+                        break;
+                    }
+                }
+                LOG("compact + merge 后剩余元素完整：", contentOk ? "PASS" : "FAIL", "（present = ", list.presentElementCount(), "，应为 500）");
+            }
+
+            LOG("--- [正确性] compact 阈值控制（不同 threshold 影响重建范围） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto aggressive = IMPList<int>(64, 1024);
+                aggressive.configureMaintenanceMerging(false);
+                aggressive.configureCompaction(true, 0, 10000);
+
+                for (int i = 0; i < 5000; ++i) {
+                    aggressive.add(i);
+                }
+                aggressive.tryMerging();
+                aggressive.awaitMerging();
+                for (int i = 0; i < 1000; ++i) {
+                    aggressive.remove(i * 5);
+                }
+                aggressive.tryMerging();
+                aggressive.awaitMerging();
+                const usize aggressiveBefore = aggressive.ingestElementCount();
+                aggressive.tryCompacting();
+                const usize aggressiveAfter = aggressive.ingestElementCount();
+
+                LOG("threshold=0：ingest ", aggressiveBefore, " → ", aggressiveAfter, "（应下降，任何有墓碑的 chunk 都重建）");
+                LOG("threshold=0 触发：", aggressiveAfter < aggressiveBefore ? "PASS" : "FAIL");
+
+                auto conservative = IMPList<int>(64, 1024);
+                conservative.configureMaintenanceMerging(false);
+                conservative.configureCompaction(true, 99, 10000);
+
+                for (int i = 0; i < 5000; ++i) {
+                    conservative.add(i);
+                }
+                conservative.tryMerging();
+                conservative.awaitMerging();
+                for (int i = 0; i < 1000; ++i) {
+                    conservative.remove(i * 5);
+                }
+                conservative.tryMerging();
+                conservative.awaitMerging();
+                const usize conservativeBefore = conservative.ingestElementCount();
+                conservative.tryCompacting();
+                const usize conservativeAfter = conservative.ingestElementCount();
+
+                LOG("threshold=99：ingest ", conservativeBefore, " → ", conservativeAfter, "（应基本不变，每 chunk 墓碑占比仅 ~20%，未达 99%）");
+                LOG("threshold=99 保守：", conservativeAfter == conservativeBefore ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [正确性] compact 关闭时显式 tryCompacting 仍生效 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+                for (int i = 0; i < 4000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                const usize before = list.ingestElementCount();
+                list.tryCompacting();
+                const usize after = list.ingestElementCount();
+
+                LOG("关闭自动 + 显式 tryCompacting：ingest ", before, " → ", after, "（应下降）");
+                LOG("显式调用仍生效：", after < before ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [正确性] 重复 tryCompacting 幂等 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 1000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+                for (int i = 0; i < 500; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                list.tryCompacting();
+                const usize countAfterFirst = list.compactionCount();
+                const usize ingestAfterFirst = list.ingestElementCount();
+
+                list.tryCompacting();
+                list.tryCompacting();
+
+                LOG("3 次 tryCompacting 后 compactionCount = ", list.compactionCount(), "（应为 ", countAfterFirst + 2, "）");
+                LOG("ingestElementCount 稳定 = ", list.ingestElementCount(), "（应为 ", ingestAfterFirst, "，无变化）");
+                LOG("present 不变 = ", list.presentElementCount(), "（应为 500）");
+            }
+
             LOG("--- [并发] 4 写线程 × 10000 元素：计数 + 完整性 ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(256, 1024);
@@ -1001,6 +1247,7 @@ namespace Catelier::test::architecture::imp {
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(64, 1024);
                 list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
                 for (int i = 0; i < 10000; ++i) {
                     list.add(i);
@@ -1029,11 +1276,534 @@ namespace Catelier::test::architecture::imp {
                 LOG("并发 add 全部丢弃：", list.presentElementCount() == 0 ? "PASS" : "FAIL");
 
                 list.configureMaintenanceMerging(true);
+                list.configureCompaction(true, 20, 10000);
+            }
+
+            LOG("--- [并发] remove 与 merge 并发正确性 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("初始 present = ", list.presentElementCount(), "（应为 10000）");
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int i = 0; i < 2500; ++i) {
+                        list.remove(i);
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 50; ++round) {
+                        list.tryMerging();
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+
+                bool noRemoved = true;
+                for (int i = 0; i < 2500; ++i) {
+                    if (list.contains(i)) {
+                        noRemoved = false;
+                        break;
+                    }
+                }
+                LOG("remove 的元素最终全部消失：", noRemoved ? "PASS" : "FAIL", "（present = ", list.presentElementCount(), "）");
+
+                bool restIntact = true;
+                for (int i = 2500; i < 10000; ++i) {
+                    if (!list.contains(i)) {
+                        restIntact = false;
+                        break;
+                    }
+                }
+                LOG("未 remove 的元素保留：", restIntact ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [并发] 多线程并发 remove 不同范围 + merge ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(256, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 20000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                constexpr int kThreadCount = 4;
+                constexpr int kPerThread = 5000;
+
+                std::vector<std::thread> threads;
+                for (int t = 0; t < kThreadCount; ++t) {
+                    threads.emplace_back([&list, t, kPerThread] {
+                        for (int i = 0; i < kPerThread; ++i) {
+                            list.remove(t * kPerThread + i);
+                        }
+                    });
+                }
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("4 线程并发 remove 20000 元素后 present = ", list.presentElementCount(), "（应为 0）");
+                LOG("isEmpty = ", list.isEmpty() ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [并发] removeIf 与 merge 并发 + 语义一致性 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    list.removeIf(intEvenPredicate);
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 50; ++round) {
+                        list.tryMerging();
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+
+                bool allOdd = true;
+                for (usize i = 0; i < list.presentElementCount(); ++i) {
+                    if (*list.get(i) % 2 == 0) {
+                        allOdd = false;
+                        break;
+                    }
+                }
+                LOG("removeIf 偶数 + merge 并发后全为奇数：", allOdd ? "PASS" : "FAIL", "（present = ", list.presentElementCount(), "，应为 5000）");
+            }
+
+            LOG("--- [并发] discard + remove + merge 三方并发（discardBuffer 去锁验证） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int i = 0; i < 2500; ++i) {
+                        list.discard(i);
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int i = 5000; i < 7500; ++i) {
+                        list.remove(i);
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 50; ++round) {
+                        list.tryMerging();
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+
+                bool removedAll = true;
+                for (int i = 0; i < 2500; ++i) {
+                    if (list.contains(i)) {
+                        removedAll = false;
+                        break;
+                    }
+                }
+                for (int i = 5000; i < 7500; ++i) {
+                    if (list.contains(i)) {
+                        removedAll = false;
+                        break;
+                    }
+                }
+                LOG("discard+remove+merge 并发后目标元素消失：", removedAll ? "PASS" : "FAIL", "（present = ", list.presentElementCount(), "，应为 5000）");
+            }
+
+            LOG("--- [并发] ingest / mergeElementCount 与 merge 并发（无锁遍历安全性） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int i = 0; i < 5000; ++i) {
+                        list.add(10000 + i);
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 100; ++round) {
+                        volatile usize i = list.ingestElementCount();
+                        volatile usize m = list.mergeElementCount();
+                        (void) i;
+                        (void) m;
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+                LOG("ingest/mergeElementCount 与 add 并发无崩溃：PASS（present = ", list.presentElementCount(), "，应为 15000）");
+            }
+
+            LOG("--- [并发] compact 与 remove 并发正确性 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                LOG("compact 前 present = ", list.presentElementCount(), "（应为 5000）");
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int i = 5000; i < 7500; ++i) {
+                        list.remove(i);
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 10; ++round) {
+                        list.tryCompacting();
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+
+                bool removedAll = true;
+                for (int i = 0; i < 7500; ++i) {
+                    if (list.contains(i)) {
+                        removedAll = false;
+                        break;
+                    }
+                }
+                LOG("compact + remove 并发后 0~7499 全消失：", removedAll ? "PASS" : "FAIL", "（present = ", list.presentElementCount(), "，应为 2500）");
+
+                bool intact = true;
+                for (int i = 7500; i < 10000; ++i) {
+                    if (!list.contains(i)) {
+                        intact = false;
+                        break;
+                    }
+                }
+                LOG("未 remove 的元素保留：", intact ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [并发] compact 与 add 并发（add 不阻塞） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 4000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int i = 10000; i < 15000; ++i) {
+                        list.add(i);
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 10; ++round) {
+                        list.tryCompacting();
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+
+                bool newElementsOk = true;
+                for (int i = 10000; i < 15000; ++i) {
+                    if (!list.contains(i)) {
+                        newElementsOk = false;
+                        break;
+                    }
+                }
+                LOG("compact 与 add 并发：新 add 元素全部保留：", newElementsOk ? "PASS" : "FAIL", "（present = ", list.presentElementCount(), "）");
+            }
+
+            LOG("--- [并发] compact 与 count 并发（无锁遍历安全性） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 5000; ++i) {
+                    list.remove(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 10; ++round) {
+                        list.tryCompacting();
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 200; ++round) {
+                        volatile usize i = list.ingestElementCount();
+                        volatile usize m = list.mergeElementCount();
+                        (void) i;
+                        (void) m;
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                LOG("compact 与 count 并发无崩溃：PASS（present = ", list.presentElementCount(), "，应为 5000）");
+            }
+
+            LOG("--- [并发] compact 与 merge 并发（tryCompacting 排队） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(true, 20, 10000);
+
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
+                list.awaitMerging();
+
+                for (int i = 0; i < 8000; ++i) {
+                    list.remove(i);
+                }
+
+                std::vector<std::thread> threads;
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 20; ++round) {
+                        list.tryMerging();
+                    }
+                });
+                threads.emplace_back([&list]() {
+                    for (int round = 0; round < 20; ++round) {
+                        list.tryCompacting();
+                    }
+                });
+                for (auto& t : threads) {
+                    t.join();
+                }
+
+                list.tryMerging();
+                list.awaitMerging();
+                list.tryCompacting();
+                list.tryMerging();
+                list.awaitMerging();
+
+                LOG("compact + merge 并发后 present = ", list.presentElementCount(), "（应为 2000）");
+                LOG("compact + merge 并发后 compactionCount = ", list.compactionCount(), "（应 >= 1）");
+            }
+
+            LOG("--- [并发] 高压 remove + merge 反复压力测试 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kRounds = 100;
+                bool ok = true;
+                for (u32 r = 0; r < kRounds; ++r) {
+                    auto list = IMPList<int>(64, 1024);
+                    list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
+
+                    for (int i = 0; i < 2000; ++i) {
+                        list.add(i);
+                    }
+                    list.tryMerging();
+
+                    std::vector<std::thread> threads;
+                    threads.emplace_back([&list]() {
+                        for (int i = 0; i < 500; ++i) {
+                            list.remove(i);
+                        }
+                    });
+                    threads.emplace_back([&list]() {
+                        for (int i = 500; i < 1000; ++i) {
+                            list.remove(i);
+                        }
+                    });
+                    threads.emplace_back([&list]() {
+                        for (int i = 0; i < 10; ++i) {
+                            list.tryMerging();
+                        }
+                    });
+                    for (auto& t : threads) {
+                        t.join();
+                    }
+
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    bool intact = true;
+                    for (int i = 0; i < 1000; ++i) {
+                        if (list.contains(i)) {
+                            intact = false;
+                            break;
+                        }
+                    }
+                    if (intact) {
+                        for (int i = 1000; i < 2000; ++i) {
+                            if (!list.contains(i)) {
+                                intact = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (!intact) {
+                        ok = false;
+                        break;
+                    }
+                }
+                LOG(kRounds, " 轮 remove + merge 并发压力：", ok ? "PASS" : "FAIL");
+            }
+
+            LOG("--- [并发] 高压 compact + remove + add 反复压力测试 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kRounds = 100;
+                bool ok = true;
+                for (u32 r = 0; r < kRounds; ++r) {
+                    auto list = IMPList<int>(64, 1024);
+                    list.configureMaintenanceMerging(false);
+                    list.configureCompaction(true, 20, 10000);
+
+                    for (int i = 0; i < 5000; ++i) {
+                        list.add(i);
+                    }
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    std::vector<std::thread> threads;
+                    threads.emplace_back([&list]() {
+                        for (int i = 0; i < 2000; ++i) {
+                            list.remove(i);
+                        }
+                    });
+                    threads.emplace_back([&list]() {
+                        for (int i = 10000; i < 12000; ++i) {
+                            list.add(i);
+                        }
+                    });
+                    threads.emplace_back([&list]() {
+                        for (int round = 0; round < 5; ++round) {
+                            list.tryCompacting();
+                        }
+                    });
+                    for (auto& t : threads) {
+                        t.join();
+                    }
+
+                    list.tryMerging();
+                    list.awaitMerging();
+                    list.tryCompacting();
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    bool intact = true;
+                    for (int i = 0; i < 2000; ++i) {
+                        if (list.contains(i)) {
+                            intact = false;
+                            break;
+                        }
+                    }
+                    if (intact) {
+                        for (int i = 2000; i < 5000; ++i) {
+                            if (!list.contains(i)) {
+                                intact = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (intact) {
+                        for (int i = 10000; i < 12000; ++i) {
+                            if (!list.contains(i)) {
+                                intact = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (!intact) {
+                        ok = false;
+                        break;
+                    }
+                }
+                LOG(kRounds, " 轮 compact + remove + add 并发压力：", ok ? "PASS" : "FAIL");
             }
 
             LOG("--- [并发] 线程退出（写线程 join 触发 threadExitCallback） ---");
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(64, 1024);
+                list.configureCompaction(false, 20, 10000);
 
                 for (int round = 0; round < 100; ++round) {
                     std::thread t([&list, round]() {
@@ -1055,6 +1825,7 @@ namespace Catelier::test::architecture::imp {
                 constexpr u32 kRounds = 200;
                 for (u32 r = 0; r < kRounds; ++r) {
                     auto list = IMPList<int>(128, 1024);
+                    list.configureCompaction(false, 20, 10000);
                     for (int i = 0; i < 500; ++i) {
                         list.add(i);
                     }
@@ -1064,6 +1835,48 @@ namespace Catelier::test::architecture::imp {
                     copy.tryMerging();
                 }
                 LOG(kRounds, " 轮构造/拷贝/析构：PASS（无崩溃即无灾难性泄漏）");
+            }
+
+            LOG("--- [内存] compact 长期运行内存收敛稳定性（200 轮 add + remove + compact） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                constexpr u32 kRounds = 200;
+                usize maxIngest = 0;
+                usize lastIngest = 0;
+
+                for (u32 r = 0; r < kRounds; ++r) {
+                    const int base = (int) (r * 1000);
+                    for (int i = 0; i < 1000; ++i) {
+                        list.add(base + i);
+                    }
+                    for (int i = 0; i < 900; ++i) {
+                        list.remove(base + i);
+                    }
+                    list.tryMerging();
+
+                    if ((r + 1) % 20 == 0) {
+                        list.tryCompacting();
+                    }
+
+                    if ((r + 1) % 10 == 0) {
+                        const usize ingest = list.ingestElementCount();
+                        if (ingest > maxIngest) {
+                            maxIngest = ingest;
+                        }
+                        lastIngest = ingest;
+                    }
+                }
+
+                list.tryCompacting();
+                list.tryMerging();
+                list.awaitMerging();
+
+                LOG("200 轮后 present = ", list.presentElementCount(), "（应为 20000，每轮净增 100）");
+                LOG("ingest 峰值 = ", maxIngest, "，最终 = ", lastIngest, "（应远小于累积写入 200000）");
+                LOG("内存收敛有效：", lastIngest < maxIngest ? "PASS" : "FAIL");
             }
 
             LOG("--- [性能] 单线程 add 延迟（完整 CAS，跳过合并数据处理，带预热，trial 内子批 IQR 剔除 + 全局 IQR，TSC 计时） ---");
@@ -1079,8 +1892,8 @@ namespace Catelier::test::architecture::imp {
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<int>(16384, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
-                    // 预热：让 FLS registry、bundle、chunk 等懒初始化工作全部在计时之外就位
                     list.add(0);
 
                     u32 writeIndex = 0;
@@ -1113,8 +1926,8 @@ namespace Catelier::test::architecture::imp {
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<int>(16384, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
-                    // 预热
                     list.discard(0);
 
                     u32 writeIndex = 0;
@@ -1147,8 +1960,8 @@ namespace Catelier::test::architecture::imp {
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<int>(16384, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
-                    // 预热
                     list.discardAll();
 
                     for (u32 s = 0; s < kSubBatchCount; ++s) {
@@ -1178,6 +1991,7 @@ namespace Catelier::test::architecture::imp {
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(1024, 1024);
                         list.configureMaintenanceMerging(false);
+                        list.configureCompaction(false, 20, 10000);
 
                         list.add(0);
                         list.tryMerging();
@@ -1199,6 +2013,7 @@ namespace Catelier::test::architecture::imp {
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(1024, 1024);
                 list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
                 for (int i = 0; i < 100000; ++i) {
                     list.add(i);
@@ -1230,6 +2045,7 @@ namespace Catelier::test::architecture::imp {
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(1024, 1024);
                 list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
                 for (int i = 0; i < 1000; ++i) {
                     list.add(i);
@@ -1280,7 +2096,9 @@ namespace Catelier::test::architecture::imp {
                 auto unorderedList = IMPList<int>(1024, 1024);
                 auto sortedList = IMPList<int>(1024, 1024);
                 unorderedList.configureMaintenanceMerging(false);
+                unorderedList.configureCompaction(false, 20, 10000);
                 sortedList.configureMaintenanceMerging(false);
+                sortedList.configureCompaction(false, 20, 10000);
 
                 for (u32 i = 0; i < kElements; ++i) {
                     unorderedList.add((int) i);
@@ -1363,7 +2181,9 @@ namespace Catelier::test::architecture::imp {
                 auto unorderedList = IMPList<int>(1024, 1024);
                 auto sortedList = IMPList<int>(1024, 1024);
                 unorderedList.configureMaintenanceMerging(false);
+                unorderedList.configureCompaction(false, 20, 10000);
                 sortedList.configureMaintenanceMerging(false);
+                sortedList.configureCompaction(false, 20, 10000);
 
                 for (u32 i = 0; i < kElements; ++i) {
                     unorderedList.add((int) i);
@@ -1451,7 +2271,9 @@ namespace Catelier::test::architecture::imp {
                 auto unorderedList = IMPList<int>(1024, 1024);
                 auto sortedList = IMPList<int>(1024, 1024);
                 unorderedList.configureMaintenanceMerging(false);
+                unorderedList.configureCompaction(false, 20, 10000);
                 sortedList.configureMaintenanceMerging(false);
+                sortedList.configureCompaction(false, 20, 10000);
 
                 for (u32 i = 0; i < kElements; ++i) {
                     const int v = (int) (i / kRepeatPerValue);
@@ -1532,6 +2354,7 @@ namespace Catelier::test::architecture::imp {
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(1024, 1024);
                         list.configureMaintenanceMerging(false);
+                        list.configureCompaction(false, 20, 10000);
 
                         std::vector<std::thread> threads;
                         timer.start();
@@ -1583,6 +2406,7 @@ namespace Catelier::test::architecture::imp {
 
                         auto list = IMPList<int>(1024, 1024);
                         list.configureRetirement(4096);
+                        list.configureCompaction(false, 20, 10000);
                         for (int i = 0; i < 10000; ++i) {
                             list.add(i);
                         }
@@ -1644,6 +2468,7 @@ namespace Catelier::test::architecture::imp {
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(cs, 1024);
                         list.configureMaintenanceMerging(false);
+                        list.configureCompaction(false, 20, 10000);
 
                         for (u32 i = 0; i < kElements; ++i) {
                             list.add((int) i);
@@ -1678,6 +2503,7 @@ namespace Catelier::test::architecture::imp {
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<int>(1024, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
                     for (u32 i = 0; i < kElements; ++i) {
                         list.add((int) i);
@@ -1720,6 +2546,7 @@ namespace Catelier::test::architecture::imp {
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<CustomStruct>(1024, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
                     for (u32 i = 0; i < kElements; ++i) {
                         list.add({ (int) i, (int) i, (int) i });
@@ -1746,6 +2573,156 @@ namespace Catelier::test::architecture::imp {
                 LOG("5万添加 + 5千删除 → 增量 merge 耗时 = 平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us（", kept, " 个样本通过 IQR）");
             }
 
+            LOG("--- [性能] compact 单次成本（不同墓碑比例，elementSize = 4，IQR 剔除） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kElements = 10000;
+                constexpr u32 kTrials = 11;
+                const u32 discardRatios[] = { 20, 50, 80 };
+
+                for (u32 ratio : discardRatios) {
+                    static u64 samples[kTrials];
+                    QpcTimer timer;
+
+                    const u32 discards = kElements * ratio / 100;
+
+                    for (u32 t = 0; t < kTrials; ++t) {
+                        auto list = IMPList<int>(1024, 1024);
+                        list.configureMaintenanceMerging(false);
+                        list.configureCompaction(false, 0, 1000000);
+
+                        for (u32 i = 0; i < kElements; ++i) {
+                            list.add((int) i);
+                        }
+                        list.tryMerging();
+                        list.awaitMerging();
+
+                        for (u32 i = 0; i < discards; ++i) {
+                            list.remove((int) i);
+                        }
+                        list.tryMerging();
+                        list.awaitMerging();
+
+                        timer.start();
+                        list.tryCompacting();
+                        samples[t] = timer.stopNs();
+                    }
+
+                    sortU64(samples, kTrials);
+
+                    double mean = 0.0;
+                    double sd = 0.0;
+                    u32 kept = 0;
+                    computeMeanSdIqr(samples, kTrials, &mean, &sd, &kept);
+
+                    LOG("墓碑占比 ", ratio, "%：compact 耗时 = 平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, kTrials, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, kTrials, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, kTrials, 0.99) / 1000.0, " us，最大 ", samples[kTrials - 1] / 1000.0, " us（", kept, " 个样本通过 IQR）");
+                }
+            }
+
+            LOG("--- [性能] compact 单独成本（不同 chunkSize，墓碑占比 50%，IQR 剔除） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
+                constexpr u32 kElements = 10000;
+                constexpr u32 kDiscards = 5000;
+                constexpr u32 kTrials = 11;
+
+                for (usize cs : chunkSizes) {
+                    static u64 samples[kTrials];
+                    QpcTimer timer;
+
+                    for (u32 t = 0; t < kTrials; ++t) {
+                        auto list = IMPList<int>(cs, 1024);
+                        list.configureMaintenanceMerging(false);
+                        list.configureCompaction(false, 0, 1000000);
+
+                        for (u32 i = 0; i < kElements; ++i) {
+                            list.add((int) i);
+                        }
+                        list.tryMerging();
+                        list.awaitMerging();
+
+                        for (u32 i = 0; i < kDiscards; ++i) {
+                            list.remove((int) i);
+                        }
+                        list.tryMerging();
+                        list.awaitMerging();
+
+                        timer.start();
+                        list.tryCompacting();
+                        samples[t] = timer.stopNs();
+                    }
+
+                    sortU64(samples, kTrials);
+
+                    double mean = 0.0;
+                    double sd = 0.0;
+                    u32 kept = 0;
+                    computeMeanSdIqr(samples, kTrials, &mean, &sd, &kept);
+
+                    LOG("chunkSize = ", cs, "，compact 耗时 = 平均 ", mean / 1e6, " ms，标准差 ", sd / 1e6, " ms，最小 ", samples[0] / 1e6, " ms，P50 ", computePercentile(samples, kTrials, 0.50) / 1e6, " ms，P90 ", computePercentile(samples, kTrials, 0.90) / 1e6, " ms，P99 ", computePercentile(samples, kTrials, 0.99) / 1e6, " ms，最大 ", samples[kTrials - 1] / 1e6, " ms（", kept, " 个样本通过 IQR）");
+                }
+            }
+
+            LOG("--- [性能] compact 前后 merge 成本对比（验证墓碑清理收益） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kElements = 10000;
+                constexpr u32 kDiscards = 5000;
+                constexpr u32 kTrials = 11;
+                static u64 beforeSamples[kTrials];
+                static u64 afterSamples[kTrials];
+                QpcTimer timer;
+
+                for (u32 t = 0; t < kTrials; ++t) {
+                    auto list = IMPList<int>(1024, 1024);
+                    list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 0, 1000000);
+
+                    for (u32 i = 0; i < kElements; ++i) {
+                        list.add((int) i);
+                    }
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    for (u32 i = 0; i < kDiscards; ++i) {
+                        list.remove((int) i);
+                    }
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    list.add(999999);
+
+                    timer.start();
+                    list.tryMerging();
+                    beforeSamples[t] = timer.stopNs();
+
+                    list.tryCompacting();
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    list.add(999998);
+
+                    timer.start();
+                    list.tryMerging();
+                    afterSamples[t] = timer.stopNs();
+                }
+
+                sortU64(beforeSamples, kTrials);
+                sortU64(afterSamples, kTrials);
+
+                double beforeMean = 0.0;
+                double beforeSd = 0.0;
+                u32 beforeKept = 0;
+                computeMeanSdIqr(beforeSamples, kTrials, &beforeMean, &beforeSd, &beforeKept);
+
+                double afterMean = 0.0;
+                double afterSd = 0.0;
+                u32 afterKept = 0;
+                computeMeanSdIqr(afterSamples, kTrials, &afterMean, &afterSd, &afterKept);
+
+                LOG("compact 前 merge（含 50% 墓碑）：平均 ", beforeMean / 1000.0, " us，标准差 ", beforeSd / 1000.0, " us，P50 ", computePercentile(beforeSamples, kTrials, 0.50) / 1000.0, " us（", beforeKept, " 个样本通过 IQR）");
+                LOG("compact 后 merge（墓碑清理）：平均 ", afterMean / 1000.0, " us，标准差 ", afterSd / 1000.0, " us，P50 ", computePercentile(afterSamples, kTrials, 0.50) / 1000.0, " us（", afterKept, " 个样本通过 IQR）");
+                LOG("merge 加速比 = ", afterMean > 0.0 ? beforeMean / afterMean : 0.0, "x");
+            }
+
             LOG("--- [性能] move 常数时间（不同规模，IQR 剔除） ---");
             LOGGER_INDENT_BLOCK(true) {
                 constexpr u32 sizes[] = { 100, 10000, 1000000 };
@@ -1754,6 +2731,7 @@ namespace Catelier::test::architecture::imp {
                 for (u32 n : sizes) {
                     auto list = IMPList<int>(1024, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
                     for (u32 i = 0; i < n; ++i) {
                         list.add((int) i);
@@ -1806,6 +2784,7 @@ namespace Catelier::test::architecture::imp {
                     for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                         auto list = IMPList<int>(1024, 1024);
                         list.configureMaintenanceMerging(false);
+                        list.configureCompaction(false, 20, 10000);
 
                         for (u32 i = 0; i < n; ++i) {
                             list.add((int) i);
@@ -1832,6 +2811,7 @@ namespace Catelier::test::architecture::imp {
             LOGGER_INDENT_BLOCK(true) {
                 auto list = IMPList<int>(256, 1024);
                 list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
                 constexpr u32 kRounds = 1000;
                 constexpr u32 kPerRound = 500;
@@ -1859,6 +2839,7 @@ namespace Catelier::test::architecture::imp {
                 for (u32 t = 0; t < BENCH_TRIALS; ++t) {
                     auto list = IMPList<int>(1024, 1024);
                     list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 20, 10000);
 
                     for (int i = 0; i < 100000; ++i) {
                         list.add(i);
@@ -1884,6 +2865,47 @@ namespace Catelier::test::architecture::imp {
                 LOG("增量 merge 延迟：平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us（", kept, " 个样本通过 IQR）");
                 LOG("  最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us");
                 LOG("  每次 trial 独立重建：100000 基准元素 + 1000 增量元素，工作量恒定");
+            }
+
+            LOG("--- [统计] 增量 compact 延迟分布（每次独立重建，IQR 剔除） ---");
+            LOGGER_INDENT_BLOCK(true) {
+                constexpr u32 kElements = 10000;
+                constexpr u32 kDiscards = 5000;
+                constexpr u32 kTrials = 11;
+                static u64 samples[kTrials];
+                QpcTimer timer;
+
+                for (u32 t = 0; t < kTrials; ++t) {
+                    auto list = IMPList<int>(1024, 1024);
+                    list.configureMaintenanceMerging(false);
+                    list.configureCompaction(false, 0, 1000000);
+
+                    for (u32 i = 0; i < kElements; ++i) {
+                        list.add((int) i);
+                    }
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    for (u32 i = 0; i < kDiscards; ++i) {
+                        list.remove((int) i);
+                    }
+                    list.tryMerging();
+                    list.awaitMerging();
+
+                    timer.start();
+                    list.tryCompacting();
+                    samples[t] = timer.stopNs();
+                }
+
+                sortU64(samples, kTrials);
+
+                double mean = 0.0;
+                double sd = 0.0;
+                u32 kept = 0;
+                computeMeanSdIqr(samples, kTrials, &mean, &sd, &kept);
+
+                LOG("增量 compact 延迟（1 万基准 + 5 千墓碑）：平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us（", kept, " 个样本通过 IQR）");
+                LOG("  最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, kTrials, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, kTrials, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, kTrials, 0.99) / 1000.0, " us，最大 ", samples[kTrials - 1] / 1000.0, " us");
             }
         }
         LOG("===== IMPList 深度测试结束 =====");

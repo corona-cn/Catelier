@@ -132,6 +132,15 @@ namespace Catelier::include::architecture::imp {
 
                 return src::architecture::imp::IMPList_configurePresentElementsSpanRecycling(this->handle, inIsPresentElementsSpanRecyclingEnabled);
             }
+            auto configureCompaction(const bool inIsCompactionEnabled, const u32 inCompactionThresholdPercent, const u64 inCompactionIntervalMs) -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_configureCompaction(this->handle, inIsCompactionEnabled, inCompactionThresholdPercent, inCompactionIntervalMs);
+            }
 
             auto presentElementsSpan(const ElementType*& outElements, usize& outElementCount) const -> bool {
                 assert(this->handle != nullptr);
@@ -206,6 +215,24 @@ namespace Catelier::include::architecture::imp {
                 }
 
                 return src::architecture::imp::IMPList_mergeElementCount(this->handle);
+            }
+            auto compactionCount() const -> usize {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return 0;
+                }
+
+                return src::architecture::imp::IMPList_compactionCount(this->handle);
+            }
+            auto lastCompactionDurationMs() const -> usize {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return 0;
+                }
+
+                return src::architecture::imp::IMPList_lastCompactionDurationMs(this->handle);
             }
 
             auto get(const usize index) const -> const ElementType* {
@@ -527,6 +554,34 @@ namespace Catelier::include::architecture::imp {
                 }
 
                 return src::architecture::imp::IMPList_timedAwaitMerging(this->handle, inTimeoutMs);
+            }
+
+            auto tryCompacting() -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_tryCompacting(this->handle);
+            }
+            auto awaitCompacting() -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_awaitCompacting(this->handle);
+            }
+            auto awaitCompacting(const u64 inTimeoutMs) -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_timedAwaitCompacting(this->handle, inTimeoutMs);
             }
 
         private:

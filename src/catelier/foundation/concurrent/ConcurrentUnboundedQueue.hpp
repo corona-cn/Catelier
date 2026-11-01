@@ -32,4 +32,6 @@ namespace Catelier::src::foundation::concurrent {
 
     auto ConcurrentUnboundedQueueNode_next(const ConcurrentUnboundedQueueNode* node) -> ConcurrentUnboundedQueueNode*;
     auto ConcurrentUnboundedQueueNode_data(const ConcurrentUnboundedQueueNode* node) -> void*;
+
+    auto ConcurrentUnboundedQueueNode_replaceData(ConcurrentUnboundedQueueNode* node, void* inData) -> void*;
 }

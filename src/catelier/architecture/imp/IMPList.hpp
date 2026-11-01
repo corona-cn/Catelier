@@ -21,6 +21,7 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_configurePropagation(IMPList* self, u64 inPollingIntervalMs, u64 inBackoffIntervalMs) -> bool;
     auto IMPList_configureMaintenanceMerging(IMPList* self, bool inIsMaintenanceMergingEnabled) -> bool;
     auto IMPList_configurePresentElementsSpanRecycling(IMPList* self, bool inIsPresentElementsSpanRecyclingEnabled) -> bool;
+    auto IMPList_configureCompaction(IMPList* self, bool inIsCompactionEnabled, u32 inCompactionThresholdPercent, u64 inCompactionIntervalMs) -> bool;
 
     auto IMPList_presentElementsSpan(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
     auto IMPList_presentElementsSpanCopy(const IMPList* self, const u8** outElements, usize* outElementCount) -> bool;
@@ -30,6 +31,8 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_mergeElementCount(const IMPList* self) -> usize;
     auto IMPList_mergeCount(const IMPList* self) -> usize;
     auto IMPList_lastMergeDurationMs(const IMPList* self) -> usize;
+    auto IMPList_compactionCount(const IMPList* self) -> usize;
+    auto IMPList_lastCompactionDurationMs(const IMPList* self) -> usize;
 
     auto IMPList_get(const IMPList* self, usize index) -> const void*;
     auto IMPList_first(const IMPList* self) -> const void*;
@@ -63,4 +66,8 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_tryMerging(IMPList* self) -> bool;
     auto IMPList_awaitMerging(IMPList* self) -> bool;
     auto IMPList_timedAwaitMerging(IMPList* self, u64 inTimeoutMs) -> bool;
+
+    auto IMPList_tryCompacting(IMPList* self) -> bool;
+    auto IMPList_awaitCompacting(IMPList* self) -> bool;
+    auto IMPList_timedAwaitCompacting(IMPList* self, u64 inTimeoutMs) -> bool;
 }

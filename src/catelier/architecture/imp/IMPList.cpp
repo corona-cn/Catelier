@@ -16,7 +16,11 @@ namespace Catelier::src::architecture::imp {
         namespace Internal {
             constexpr u64 DEFAULT_PROPAGATION_POLLING_INTERVAL_MS = 1;
             constexpr u64 DEFAULT_PROPAGATION_BACKOFF_INTERVAL_MS = 1;
+
             constexpr usize DISCARD_LINEAR_THRESHOLD = 16;
+
+            constexpr u32 DEFAULT_COMPACTION_THRESHOLD_PERCENT = 20;
+            constexpr u64 DEFAULT_COMPACTION_INTERVAL_MS = 10000;
 
             namespace {
                 auto hashElementKey(const u64 inElementKey) -> usize {
@@ -357,6 +361,9 @@ namespace Catelier::src::architecture::imp {
         usize discardBufferSize;
         u64 propagationPollingIntervalMs;
         u64 propagationBackoffIntervalMs;
+        bool isCompactionEnabled;
+        u32 compactionThresholdPercent;
+        u64 compactionIntervalMs;
 
         IMPList_ElementSortingStrategy elementSortingStrategy;
         i32 (*elementSortingComparator)(const void*, const void*);
@@ -393,6 +400,14 @@ namespace Catelier::src::architecture::imp {
         foundation::sync::ConditionalVar awaitMergingCondition;
         u64 mergeCount;
         u64 lastMergeDurationMs;
+
+        alignas(64) bool isCompactionSignaled;
+        bool isCompactionExecuting;
+        alignas(64) u64 sealedReaderCount;
+        foundation::primitive::Mutex awaitCompactingMutex;
+        foundation::sync::ConditionalVar awaitCompactingCondition;
+        u64 compactionCount;
+        u64 lastCompactionDurationMs;
     } IMPList;
 
     namespace {
@@ -414,6 +429,7 @@ namespace Catelier::src::architecture::imp {
             using namespace foundation::sync;
 
             auto* const self = (IMPList*) inSelf;
+            u64 compactionIntervalAnchorMs = Time_currentMs();
             while (AtomicBool_load(&self->isMaintenanceThreadActive, MemoryOrder::ACQUIRE)) {
                 ConflatedSignal_timedWait(&self->maintenanceTrigger, Atomic64_load(&self->propagationPollingIntervalMs, MemoryOrder::ACQUIRE));
 
@@ -421,17 +437,24 @@ namespace Catelier::src::architecture::imp {
                     break;
                 }
 
-                while (AtomicBool_load(&self->isMergeSignaled, MemoryOrder::ACQUIRE) && AtomicBool_load(&self->isMaintenanceThreadActive, MemoryOrder::ACQUIRE)) {
-                    if (AtomicBool_load(&self->isMaintenanceMergingEnabled, MemoryOrder::ACQUIRE)) {
-                        IMPList_tryMerging(self);
-                    } else {
-                        Mutex_lock(&self->awaitMergingMutex);
+                while ((AtomicBool_load(&self->isMergeSignaled, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::ACQUIRE)) && AtomicBool_load(&self->isMaintenanceThreadActive, MemoryOrder::ACQUIRE)) {
+                    if (AtomicBool_load(&self->isMergeSignaled, MemoryOrder::ACQUIRE)) {
+                        if (AtomicBool_load(&self->isMaintenanceMergingEnabled, MemoryOrder::ACQUIRE)) {
+                            IMPList_tryMerging(self);
+                        } else {
+                            Mutex_lock(&self->awaitMergingMutex);
 
-                        AtomicBool_store(&self->isMergeSignaled, false, MemoryOrder::RELEASE);
+                            AtomicBool_store(&self->isMergeSignaled, false, MemoryOrder::RELEASE);
 
-                        ConditionalVar_broadcast(&self->awaitMergingCondition);
+                            ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                        Mutex_unlock(&self->awaitMergingMutex);
+                            Mutex_unlock(&self->awaitMergingMutex);
+                        }
+                    }
+
+                    if (AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::ACQUIRE) || (AtomicBool_load(&self->isCompactionEnabled, MemoryOrder::RELAXED) && Time_currentMs() - compactionIntervalAnchorMs >= Atomic64_load(&self->compactionIntervalMs, MemoryOrder::RELAXED))) {
+                        compactionIntervalAnchorMs = Time_currentMs();
+                        IMPList_tryCompacting(self);
                     }
 
                     Time_sleepMs(Atomic64_load(&self->propagationBackoffIntervalMs, MemoryOrder::ACQUIRE));
@@ -535,6 +558,9 @@ namespace Catelier::src::architecture::imp {
         self->discardBufferSize = inDiscardBufferSize;
         Atomic64_store(&self->propagationPollingIntervalMs, Internal::DEFAULT_PROPAGATION_POLLING_INTERVAL_MS, MemoryOrder::RELAXED);
         Atomic64_store(&self->propagationBackoffIntervalMs, Internal::DEFAULT_PROPAGATION_BACKOFF_INTERVAL_MS, MemoryOrder::RELAXED);
+        AtomicBool_store(&self->isCompactionEnabled, true, MemoryOrder::RELAXED);
+        Atomic32_store(&self->compactionThresholdPercent, Internal::DEFAULT_COMPACTION_THRESHOLD_PERCENT, MemoryOrder::RELAXED);
+        Atomic64_store(&self->compactionIntervalMs, Internal::DEFAULT_COMPACTION_INTERVAL_MS, MemoryOrder::RELAXED);
 
         self->elementSortingStrategy = inElementSortingStrategy;
         self->elementSortingComparator = inElementSortingComparator;
@@ -556,6 +582,12 @@ namespace Catelier::src::architecture::imp {
         self->isMaintenanceThreadActive = true;
         self->mergeCount = 0;
         self->lastMergeDurationMs = 0;
+
+        self->isCompactionSignaled = false;
+        self->isCompactionExecuting = false;
+        Atomic64_store(&self->sealedReaderCount, 0, MemoryOrder::RELAXED);
+        self->compactionCount = 0;
+        self->lastCompactionDurationMs = 0;
 
         if (!ConflatedSignal_init(&self->maintenanceTrigger)) {
             free(self);
@@ -583,7 +615,28 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
+        if (!Mutex_init(&self->awaitCompactingMutex)) {
+            Mutex_destroy(&self->mergeMutex);
+            ConditionalVar_destroy(&self->awaitMergingCondition);
+            Mutex_destroy(&self->awaitMergingMutex);
+            ConflatedSignal_destroy(&self->maintenanceTrigger);
+            free(self);
+            return nullptr;
+        }
+
+        if (!ConditionalVar_init(&self->awaitCompactingCondition)) {
+            Mutex_destroy(&self->awaitCompactingMutex);
+            Mutex_destroy(&self->mergeMutex);
+            ConditionalVar_destroy(&self->awaitMergingCondition);
+            Mutex_destroy(&self->awaitMergingMutex);
+            ConflatedSignal_destroy(&self->maintenanceTrigger);
+            free(self);
+            return nullptr;
+        }
+
         if (!ThreadLocalTable_construct(&self->chunkBundleThreadLocalTable, ElementChunkBundle_createValueCallback, ElementChunkBundle_valueThreadExitCallback, ElementChunkBundle_destroyValueCallback, self)) {
+            ConditionalVar_destroy(&self->awaitCompactingCondition);
+            Mutex_destroy(&self->awaitCompactingMutex);
             Mutex_destroy(&self->mergeMutex);
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
@@ -594,6 +647,8 @@ namespace Catelier::src::architecture::imp {
 
         if (!ThreadLocalTable_construct(&self->discardBufferBundleThreadLocalTable, DiscardBufferBundle_createValueCallback, DiscardBufferBundle_valueThreadExitCallback, DiscardBufferBundle_destroyValueCallback, self)) {
             ThreadLocalTable_destruct(&self->chunkBundleThreadLocalTable);
+            ConditionalVar_destroy(&self->awaitCompactingCondition);
+            Mutex_destroy(&self->awaitCompactingMutex);
             Mutex_destroy(&self->mergeMutex);
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
@@ -605,6 +660,8 @@ namespace Catelier::src::architecture::imp {
         if (!Thread_init(&self->maintenanceThread)) {
             ThreadLocalTable_destruct(&self->discardBufferBundleThreadLocalTable);
             ThreadLocalTable_destruct(&self->chunkBundleThreadLocalTable);
+            ConditionalVar_destroy(&self->awaitCompactingCondition);
+            Mutex_destroy(&self->awaitCompactingMutex);
             Mutex_destroy(&self->mergeMutex);
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
@@ -617,6 +674,8 @@ namespace Catelier::src::architecture::imp {
             Thread_destroy(&self->maintenanceThread);
             ThreadLocalTable_destruct(&self->discardBufferBundleThreadLocalTable);
             ThreadLocalTable_destruct(&self->chunkBundleThreadLocalTable);
+            ConditionalVar_destroy(&self->awaitCompactingCondition);
+            Mutex_destroy(&self->awaitCompactingMutex);
             Mutex_destroy(&self->mergeMutex);
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
@@ -686,6 +745,8 @@ namespace Catelier::src::architecture::imp {
             free(self->mergeDiscardElements);
         }
 
+        ConditionalVar_destroy(&self->awaitCompactingCondition);
+        Mutex_destroy(&self->awaitCompactingMutex);
         ConditionalVar_destroy(&self->awaitMergingCondition);
         Mutex_destroy(&self->awaitMergingMutex);
         Mutex_destroy(&self->mergeMutex);
@@ -710,6 +771,9 @@ namespace Catelier::src::architecture::imp {
 
         Atomic64_store(&newSelf->propagationPollingIntervalMs, Atomic64_load(&self->propagationPollingIntervalMs, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
         Atomic64_store(&newSelf->propagationBackoffIntervalMs, Atomic64_load(&self->propagationBackoffIntervalMs, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
+        AtomicBool_store(&newSelf->isCompactionEnabled, AtomicBool_load(&self->isCompactionEnabled, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
+        Atomic32_store(&newSelf->compactionThresholdPercent, Atomic32_load(&self->compactionThresholdPercent, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
+        Atomic64_store(&newSelf->compactionIntervalMs, Atomic64_load(&self->compactionIntervalMs, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
 
         if (self->retiredPresentElementsCapacity > 0) {
             if (!IMPList_configureRetirement(newSelf, self->retiredPresentElementsCapacity)) {
@@ -916,6 +980,23 @@ namespace Catelier::src::architecture::imp {
 
         return true;
     }
+    auto IMPList_configureCompaction(IMPList* const self, const bool inIsCompactionEnabled, const u32 inCompactionThresholdPercent, const u64 inCompactionIntervalMs) -> bool {
+        using namespace foundation::primitive;
+
+        if (!self) {
+            return false;
+        }
+
+        AtomicBool_store(&self->isCompactionEnabled, inIsCompactionEnabled, MemoryOrder::RELEASE);
+        Atomic32_store(&self->compactionThresholdPercent, inCompactionThresholdPercent, MemoryOrder::RELAXED);
+        Atomic64_store(&self->compactionIntervalMs, inCompactionIntervalMs, MemoryOrder::RELEASE);
+
+        if (inIsCompactionEnabled) {
+            ConflatedSignal_signal(&self->maintenanceTrigger);
+        }
+
+        return true;
+    }
 
     auto IMPList_presentElementsSpan(const IMPList* const self, const u8** const outElements, usize* const outElementCount) -> bool {
         if (!self || !outElements || !outElementCount) {
@@ -986,11 +1067,20 @@ namespace Catelier::src::architecture::imp {
             return 0;
         }
 
+        while (true) {
+            while (AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         usize total = 0;
 
-        Mutex_lock(&((IMPList*) self)->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::RELAXED);
@@ -1009,7 +1099,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&((IMPList*) self)->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         return total;
     }
@@ -1021,11 +1111,20 @@ namespace Catelier::src::architecture::imp {
             return 0;
         }
 
+        while (true) {
+            while (AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         usize total = 0;
 
-        Mutex_lock(&((IMPList*) self)->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* node = ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
@@ -1039,7 +1138,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&((IMPList*) self)->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         return total;
     }
@@ -1056,6 +1155,20 @@ namespace Catelier::src::architecture::imp {
         }
 
         return (usize) foundation::primitive::Atomic64_load(&self->lastMergeDurationMs, foundation::primitive::MemoryOrder::ACQUIRE);
+    }
+    auto IMPList_compactionCount(const IMPList* const self) -> usize {
+        if (!self) {
+            return 0;
+        }
+
+        return (usize) foundation::primitive::Atomic64_load(&self->compactionCount, foundation::primitive::MemoryOrder::ACQUIRE);
+    }
+    auto IMPList_lastCompactionDurationMs(const IMPList* const self) -> usize {
+        if (!self) {
+            return 0;
+        }
+
+        return (usize) foundation::primitive::Atomic64_load(&self->lastCompactionDurationMs, foundation::primitive::MemoryOrder::ACQUIRE);
     }
 
     auto IMPList_get(const IMPList* const self, const usize index) -> const void* {
@@ -1273,11 +1386,20 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
+        while (true) {
+            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         bool removed = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
@@ -1346,7 +1468,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1368,11 +1490,20 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
+        while (true) {
+            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         bool removed = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
@@ -1441,7 +1572,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1463,11 +1594,20 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
+        while (true) {
+            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         bool removed = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
@@ -1558,7 +1698,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1580,11 +1720,20 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
+        while (true) {
+            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         bool removed = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
@@ -1653,7 +1802,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1675,11 +1824,20 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
+        while (true) {
+            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                Thread_yield();
+            }
+            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
+                break;
+            }
+            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        }
+
         bool removed = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
             auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
@@ -1742,7 +1900,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
+        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -2285,12 +2443,12 @@ namespace Catelier::src::architecture::imp {
         usize totalElementCount = 0;
         bool collectFailed = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
-            AtomicBool_store(&bundle->isCorrupted, false, MemoryOrder::RELAXED);
+            // 收集前 exchange isCorrupted，清理历史标记
+            // 收集期间若 remove 再次设 true，下面的 anyCorrupted 检查会捕获
+            AtomicBool_exchange(&bundle->isCorrupted, false, MemoryOrder::ACQUIRE_RELEASE);
 
             if (isDiscardAll) {
                 auto* const currentChunk = (ElementChunk*) AtomicPtr_load((void* const*) &bundle->currentChunk, MemoryOrder::ACQUIRE);
@@ -2400,8 +2558,6 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
-
         if (collectFailed) {
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
@@ -2424,9 +2580,7 @@ namespace Catelier::src::architecture::imp {
         bool discardCollectFailed = false;
 
         if (isDiscardAll) {
-            Mutex_lock(&self->discardBufferBundleThreadLocalTable.lock);
-
-            for (auto* entry = self->discardBufferBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+            for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->discardBufferBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
                 auto* const bundle = (DiscardBufferBundle*) entry->value;
 
                 while (true) {
@@ -2458,9 +2612,7 @@ namespace Catelier::src::architecture::imp {
                     }
                 }
             }
-
-            Mutex_unlock(&self->discardBufferBundleThreadLocalTable.lock);
-        } else if (self->discardBufferBundleThreadLocalTable.headEntry != nullptr) {
+        } else if (AtomicPtr_load((void* const*) &self->discardBufferBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE) != nullptr) {
             if (self->mergeDiscardElementsCapacity < 16) {
                 auto* const newElements = (u8*) realloc(self->mergeDiscardElements, self->elementSize * 16);
                 if (!newElements) {
@@ -2486,9 +2638,7 @@ namespace Catelier::src::architecture::imp {
             discardElements = self->mergeDiscardElements;
             discardCapacity = self->mergeDiscardElementsCapacity;
 
-            Mutex_lock(&self->discardBufferBundleThreadLocalTable.lock);
-
-            for (auto* entry = self->discardBufferBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+            for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->discardBufferBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
                 auto* const bundle = (DiscardBufferBundle*) entry->value;
 
                 while (true) {
@@ -2599,8 +2749,6 @@ namespace Catelier::src::architecture::imp {
                     break;
                 }
             }
-
-            Mutex_unlock(&self->discardBufferBundleThreadLocalTable.lock);
         }
 
         if (discardCollectFailed) {
@@ -2897,17 +3045,13 @@ namespace Catelier::src::architecture::imp {
 
         bool anyCorrupted = false;
 
-        Mutex_lock(&self->chunkBundleThreadLocalTable.lock);
-
-        for (auto* entry = self->chunkBundleThreadLocalTable.headEntry; entry; entry = entry->nextInOwner) {
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
             if (AtomicBool_load(&bundle->isCorrupted, MemoryOrder::ACQUIRE)) {
                 anyCorrupted = true;
                 break;
             }
         }
-
-        Mutex_unlock(&self->chunkBundleThreadLocalTable.lock);
 
         if (anyCorrupted) {
             bool expectedSignaled = false;
@@ -2968,6 +3112,145 @@ namespace Catelier::src::architecture::imp {
         }
 
         Mutex_unlock(&self->awaitMergingMutex);
+
+        return result;
+    }
+
+    auto IMPList_tryCompacting(IMPList* const self) -> bool {
+        using namespace foundation::primitive;
+        using namespace foundation::concurrent;
+        using namespace foundation::sync;
+
+        if (!self) {
+            return false;
+        }
+
+        bool expectedExecuting = false;
+        if (!AtomicBool_compareExchange(&self->isCompactionExecuting, &expectedExecuting, true, MemoryOrder::ACQUIRE_RELEASE)) {
+            if (!AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::RELAXED)) {
+                bool expectedSignaled = false;
+                if (AtomicBool_compareExchange(&self->isCompactionSignaled, &expectedSignaled, true, MemoryOrder::ACQUIRE_RELEASE)) {
+                    ConflatedSignal_signal(&self->maintenanceTrigger);
+                }
+            }
+            return true;
+        }
+
+        const u64 compactionStartTimeMs = Time_currentMs();
+
+        AtomicBool_store(&self->isCompactionSignaled, false, MemoryOrder::RELAXED);
+
+        while (Atomic64_load(&self->sealedReaderCount, MemoryOrder::ACQUIRE) > 0) {
+            Thread_yield();
+        }
+
+        for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
+            auto* const bundle = (ElementChunkBundle*) entry->value;
+
+            auto* node = ConcurrentUnboundedQueue_begin(bundle->sealedChunks);
+            while (node) {
+                auto* const chunk = *(ElementChunk**) ConcurrentUnboundedQueueNode_data(node);
+                if (chunk) {
+                    const usize elementCount = (usize) Atomic64_load(&chunk->elementCount, MemoryOrder::ACQUIRE);
+
+                    if (elementCount > 0 && AtomicBool_load(&chunk->isTainted, MemoryOrder::ACQUIRE)) {
+                        usize validCount = 0;
+                        for (usize i = 0; i < elementCount; ++i) {
+                            if (Atomic8_load((const u8*) &chunk->elementStates[i], MemoryOrder::RELAXED) == ElementChunk::ElementState::VALID) {
+                                validCount++;
+                            }
+                        }
+
+                        if (validCount < elementCount && (elementCount - validCount) * 100 >= (usize) Atomic32_load(&self->compactionThresholdPercent, MemoryOrder::RELAXED) * elementCount) {
+                            auto* const newChunk = ElementChunk_construct(self->elementSize, self->elementChunkSize);
+                            if (newChunk) {
+                                usize writeIndex = 0;
+                                for (usize i = 0; i < elementCount; ++i) {
+                                    if (Atomic8_load((const u8*) &chunk->elementStates[i], MemoryOrder::RELAXED) == ElementChunk::ElementState::VALID) {
+                                        memcpy(newChunk->elements + writeIndex * self->elementSize, chunk->elements + i * self->elementSize, self->elementSize);
+                                        Atomic8_store((u8*) &newChunk->elementStates[writeIndex], ElementChunk::ElementState::VALID, MemoryOrder::RELAXED);
+                                        writeIndex++;
+                                    }
+                                }
+
+                                Atomic64_store(&newChunk->elementCount, writeIndex, MemoryOrder::RELEASE);
+                                AtomicBool_store(&newChunk->isValid, false, MemoryOrder::RELEASE);
+
+                                auto* const oldChunk = (ElementChunk*) ConcurrentUnboundedQueueNode_replaceData(node, newChunk);
+                                if (oldChunk) {
+                                    ElementChunk_destruct(oldChunk);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                node = ConcurrentUnboundedQueueNode_next(node);
+            }
+        }
+
+        Atomic64_store(&self->lastCompactionDurationMs, Time_currentMs() - compactionStartTimeMs, MemoryOrder::RELAXED);
+        Atomic64_fetchAdd(&self->compactionCount, 1, MemoryOrder::RELAXED);
+
+        Mutex_lock(&self->awaitCompactingMutex);
+
+        AtomicBool_store(&self->isCompactionExecuting, false, MemoryOrder::RELEASE);
+
+        ConditionalVar_broadcast(&self->awaitCompactingCondition);
+
+        Mutex_unlock(&self->awaitCompactingMutex);
+
+        if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
+            bool expectedSignaled = false;
+            if (AtomicBool_compareExchange(&self->isMergeSignaled, &expectedSignaled, true, MemoryOrder::ACQUIRE_RELEASE)) {
+                ConflatedSignal_signal(&self->maintenanceTrigger);
+            }
+        }
+
+        return true;
+    }
+    auto IMPList_awaitCompacting(IMPList* const self) -> bool {
+        using namespace foundation::primitive;
+        using namespace foundation::sync;
+
+        if (!self) {
+            return false;
+        }
+
+        ConflatedSignal_signal(&self->maintenanceTrigger);
+
+        Mutex_lock(&self->awaitCompactingMutex);
+
+        while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::ACQUIRE)) {
+            ConditionalVar_wait(&self->awaitCompactingCondition, &self->awaitCompactingMutex);
+        }
+
+        Mutex_unlock(&self->awaitCompactingMutex);
+
+        return true;
+    }
+    auto IMPList_timedAwaitCompacting(IMPList* const self, const u64 inTimeoutMs) -> bool {
+        using namespace foundation::primitive;
+        using namespace foundation::sync;
+
+        if (!self) {
+            return false;
+        }
+
+        ConflatedSignal_signal(&self->maintenanceTrigger);
+
+        Mutex_lock(&self->awaitCompactingMutex);
+
+        bool result = true;
+
+        while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::ACQUIRE)) {
+            if (inTimeoutMs == 0 || !ConditionalVar_timedWait(&self->awaitCompactingCondition, &self->awaitCompactingMutex, inTimeoutMs)) {
+                result = false;
+                break;
+            }
+        }
+
+        Mutex_unlock(&self->awaitCompactingMutex);
 
         return result;
     }

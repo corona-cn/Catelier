@@ -475,4 +475,12 @@ namespace Catelier::src::foundation::concurrent {
 
         return node->data;
     }
+
+    auto ConcurrentUnboundedQueueNode_replaceData(ConcurrentUnboundedQueueNode* const node, void* const inData) -> void* {
+        if (!node || !node->data) {
+            return nullptr;
+        }
+
+        return primitive::AtomicPtr_exchange((void**) node->data, inData, primitive::ACQUIRE_RELEASE);
+    }
 }
