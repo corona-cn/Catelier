@@ -5,6 +5,7 @@
 #include "../../foundation/primitive/Atomic.hpp"
 #include "../../foundation/primitive/Thread.hpp"
 #include "../../foundation/primitive/Mutex.hpp"
+#include "../../foundation/primitive/SpinMutex.hpp"
 #include "../../foundation/primitive/Time.hpp"
 #include "../../foundation/sync/ConditionalVar.hpp"
 #include "../../foundation/sync/ConflatedSignal.hpp"
@@ -354,6 +355,7 @@ namespace Catelier::src::architecture::imp {
             u8* elements;
             usize count;
             usize capacity;
+            u64 refCount;
         } PresentElementsSpan;
 
         usize elementSize;
@@ -361,6 +363,7 @@ namespace Catelier::src::architecture::imp {
         usize discardBufferSize;
         u64 propagationPollingIntervalMs;
         u64 propagationBackoffIntervalMs;
+        bool isPresentElementsSpanRecyclingEnabled;
         bool isCompactionEnabled;
         u32 compactionThresholdPercent;
         u64 compactionIntervalMs;
@@ -370,17 +373,14 @@ namespace Catelier::src::architecture::imp {
 
         alignas(64) PresentElementsSpan* presentElementsSpan;
         PresentElementsSpan* sparePresentElementsSpan;
-        bool isPresentElementsSpanRecyclingEnabled;
+        foundation::primitive::SpinMutex presentElementsSpanLock;
+
+        foundation::primitive::SpinMutex sealedChunksLock;
 
         foundation::concurrency::ThreadLocalTable chunkBundleThreadLocalTable;
         foundation::concurrency::ThreadLocalTable discardBufferBundleThreadLocalTable;
 
         bool isDiscardAllSignaled;
-
-        alignas(64) PresentElementsSpan** retiredPresentElements;
-        usize retiredPresentElementsCapacity;
-        usize retiredPresentElementCount;
-        usize retiredPresentElementIndex;
 
         foundation::primitive::Thread maintenanceThread;
         bool isMaintenanceThreadActive;
@@ -403,7 +403,6 @@ namespace Catelier::src::architecture::imp {
 
         alignas(64) bool isCompactionSignaled;
         bool isCompactionExecuting;
-        alignas(64) u64 sealedReaderCount;
         foundation::primitive::Mutex awaitCompactingMutex;
         foundation::sync::ConditionalVar awaitCompactingCondition;
         u64 compactionCount;
@@ -462,75 +461,36 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        auto IMPList_retirePresentElements(IMPList* const self) -> void {
+        auto IMPList_recyclePresentElementsSpan(IMPList* const self, IMPList::PresentElementsSpan* const span) -> void {
             using namespace foundation::primitive;
 
-            auto* const oldSpan = (IMPList::PresentElementsSpan*) AtomicPtr_exchange((void**) &self->presentElementsSpan, nullptr, MemoryOrder::ACQUIRE_RELEASE);
-            if (!oldSpan) {
+            if (!span) {
                 return;
             }
 
-            if (self->retiredPresentElementsCapacity == 0) {
-                if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED)) {
-                    if (self->sparePresentElementsSpan) {
-                        if (self->sparePresentElementsSpan->capacity >= oldSpan->capacity) {
-                            if (oldSpan->elements) {
-                                free((void*) oldSpan->elements);
-                            }
-                            free(oldSpan);
-                        } else {
-                            if (self->sparePresentElementsSpan->elements) {
-                                free((void*) self->sparePresentElementsSpan->elements);
-                            }
-                            free(self->sparePresentElementsSpan);
-                            self->sparePresentElementsSpan = oldSpan;
+            if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED)) {
+                if (self->sparePresentElementsSpan) {
+                    if (self->sparePresentElementsSpan->capacity >= span->capacity) {
+                        if (span->elements) {
+                            free((void*) span->elements);
                         }
+                        free(span);
                     } else {
-                        self->sparePresentElementsSpan = oldSpan;
+                        if (self->sparePresentElementsSpan->elements) {
+                            free((void*) self->sparePresentElementsSpan->elements);
+                        }
+                        free(self->sparePresentElementsSpan);
+                        self->sparePresentElementsSpan = span;
                     }
                 } else {
-                    if (oldSpan->elements) {
-                        free((void*) oldSpan->elements);
-                    }
-                    free(oldSpan);
-                }
-                return;
-            }
-
-            if (self->retiredPresentElementCount == self->retiredPresentElementsCapacity) {
-                auto* const evictedSpan = self->retiredPresentElements[self->retiredPresentElementIndex];
-                self->retiredPresentElements[self->retiredPresentElementIndex] = nullptr;
-                if (evictedSpan) {
-                    if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED)) {
-                        if (self->sparePresentElementsSpan) {
-                            if (self->sparePresentElementsSpan->capacity >= evictedSpan->capacity) {
-                                if (evictedSpan->elements) {
-                                    free((void*) evictedSpan->elements);
-                                }
-                                free(evictedSpan);
-                            } else {
-                                if (self->sparePresentElementsSpan->elements) {
-                                    free((void*) self->sparePresentElementsSpan->elements);
-                                }
-                                free(self->sparePresentElementsSpan);
-                                self->sparePresentElementsSpan = evictedSpan;
-                            }
-                        } else {
-                            self->sparePresentElementsSpan = evictedSpan;
-                        }
-                    } else {
-                        if (evictedSpan->elements) {
-                            free((void*) evictedSpan->elements);
-                        }
-                        free(evictedSpan);
-                    }
+                    self->sparePresentElementsSpan = span;
                 }
             } else {
-                self->retiredPresentElementCount++;
+                if (span->elements) {
+                    free((void*) span->elements);
+                }
+                free(span);
             }
-
-            self->retiredPresentElements[self->retiredPresentElementIndex] = oldSpan;
-            self->retiredPresentElementIndex = (self->retiredPresentElementIndex + 1) % self->retiredPresentElementsCapacity;
         }
     }
 
@@ -561,20 +521,15 @@ namespace Catelier::src::architecture::imp {
         AtomicBool_store(&self->isCompactionEnabled, true, MemoryOrder::RELAXED);
         Atomic32_store(&self->compactionThresholdPercent, Internal::DEFAULT_COMPACTION_THRESHOLD_PERCENT, MemoryOrder::RELAXED);
         Atomic64_store(&self->compactionIntervalMs, Internal::DEFAULT_COMPACTION_INTERVAL_MS, MemoryOrder::RELAXED);
+        AtomicBool_store(&self->isPresentElementsSpanRecyclingEnabled, true, MemoryOrder::RELAXED);
 
         self->elementSortingStrategy = inElementSortingStrategy;
         self->elementSortingComparator = inElementSortingComparator;
 
         self->presentElementsSpan = nullptr;
         self->sparePresentElementsSpan = nullptr;
-        AtomicBool_store(&self->isPresentElementsSpanRecyclingEnabled, true, MemoryOrder::RELAXED);
 
         self->isDiscardAllSignaled = false;
-
-        self->retiredPresentElements = nullptr;
-        self->retiredPresentElementCount = 0;
-        self->retiredPresentElementIndex = 0;
-        self->retiredPresentElementsCapacity = 0;
 
         self->isMergeSignaled = false;
         self->isMergeExecuting = false;
@@ -585,17 +540,31 @@ namespace Catelier::src::architecture::imp {
 
         self->isCompactionSignaled = false;
         self->isCompactionExecuting = false;
-        Atomic64_store(&self->sealedReaderCount, 0, MemoryOrder::RELAXED);
         self->compactionCount = 0;
         self->lastCompactionDurationMs = 0;
 
+        if (!SpinMutex_init(&self->presentElementsSpanLock)) {
+            free(self);
+            return nullptr;
+        }
+
+        if (!SpinMutex_init(&self->sealedChunksLock)) {
+            SpinMutex_destroy(&self->presentElementsSpanLock);
+            free(self);
+            return nullptr;
+        }
+
         if (!ConflatedSignal_init(&self->maintenanceTrigger)) {
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
         if (!Mutex_init(&self->awaitMergingMutex)) {
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -603,6 +572,8 @@ namespace Catelier::src::architecture::imp {
         if (!ConditionalVar_init(&self->awaitMergingCondition)) {
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -611,6 +582,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -620,6 +593,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -630,6 +605,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -641,6 +618,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -653,6 +632,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -666,6 +647,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -680,6 +663,8 @@ namespace Catelier::src::architecture::imp {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             Mutex_destroy(&self->awaitMergingMutex);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
+            SpinMutex_destroy(&self->sealedChunksLock);
+            SpinMutex_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -720,19 +705,6 @@ namespace Catelier::src::architecture::imp {
             free(self->sparePresentElementsSpan);
         }
 
-        if (self->retiredPresentElements) {
-            for (usize i = 0; i < self->retiredPresentElementCount; ++i) {
-                if (self->retiredPresentElements[i]) {
-                    if (self->retiredPresentElements[i]->elements) {
-                        free((void*) self->retiredPresentElements[i]->elements);
-                    }
-                    free(self->retiredPresentElements[i]);
-                }
-            }
-
-            free(self->retiredPresentElements);
-        }
-
         if (self->mergeSourceChunks) {
             free(self->mergeSourceChunks);
         }
@@ -745,11 +717,13 @@ namespace Catelier::src::architecture::imp {
             free(self->mergeDiscardElements);
         }
 
+        SpinMutex_destroy(&self->sealedChunksLock);
+        SpinMutex_destroy(&self->presentElementsSpanLock);
         ConditionalVar_destroy(&self->awaitCompactingCondition);
         Mutex_destroy(&self->awaitCompactingMutex);
+        Mutex_destroy(&self->mergeMutex);
         ConditionalVar_destroy(&self->awaitMergingCondition);
         Mutex_destroy(&self->awaitMergingMutex);
-        Mutex_destroy(&self->mergeMutex);
 
         free(self);
 
@@ -774,13 +748,7 @@ namespace Catelier::src::architecture::imp {
         AtomicBool_store(&newSelf->isCompactionEnabled, AtomicBool_load(&self->isCompactionEnabled, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
         Atomic32_store(&newSelf->compactionThresholdPercent, Atomic32_load(&self->compactionThresholdPercent, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
         Atomic64_store(&newSelf->compactionIntervalMs, Atomic64_load(&self->compactionIntervalMs, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
-
-        if (self->retiredPresentElementsCapacity > 0) {
-            if (!IMPList_configureRetirement(newSelf, self->retiredPresentElementsCapacity)) {
-                IMPList_destruct(newSelf);
-                return nullptr;
-            }
-        }
+        AtomicBool_store(&newSelf->isPresentElementsSpanRecyclingEnabled, AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::ACQUIRE), MemoryOrder::RELAXED);
 
         const auto* const sourceSpan = (const IMPList::PresentElementsSpan*) AtomicPtr_load((void* const*) &self->presentElementsSpan, MemoryOrder::ACQUIRE);
         if (sourceSpan && sourceSpan->count > 0) {
@@ -806,6 +774,7 @@ namespace Catelier::src::architecture::imp {
             newSpan->elements = newPresentElements;
             newSpan->count = sourceElementCount;
             newSpan->capacity = sourceElementCount;
+            newSpan->refCount = 1;
             newSelf->presentElementsSpan = newSpan;
 
             auto* const bundle = (ElementChunkBundle*) ThreadLocalTable_getOrCreate(&newSelf->chunkBundleThreadLocalTable);
@@ -845,89 +814,6 @@ namespace Catelier::src::architecture::imp {
         return newSelf;
     }
 
-    auto IMPList_configureRetirement(IMPList* const self, const usize inRetiredPresentElementsCapacity) -> bool {
-        using namespace foundation::primitive;
-
-        if (!self) {
-            return false;
-        }
-
-        Mutex_lock(&self->mergeMutex);
-
-        if (self->retiredPresentElementsCapacity == inRetiredPresentElementsCapacity) {
-            Mutex_unlock(&self->mergeMutex);
-            return true;
-        }
-
-        IMPList::PresentElementsSpan** newRetiredPresentElements = nullptr;
-        if (inRetiredPresentElementsCapacity > 0) {
-            newRetiredPresentElements = (IMPList::PresentElementsSpan**) calloc(inRetiredPresentElementsCapacity, sizeof(IMPList::PresentElementsSpan*));
-            if (!newRetiredPresentElements) {
-                Mutex_unlock(&self->mergeMutex);
-                return false;
-            }
-        }
-
-        const usize oldCapacity = self->retiredPresentElementsCapacity;
-        const usize oldCount = self->retiredPresentElementCount;
-        const usize oldIndex = self->retiredPresentElementIndex;
-
-        const usize keepCount = oldCount < inRetiredPresentElementsCapacity ? oldCount : inRetiredPresentElementsCapacity;
-
-        if (newRetiredPresentElements && self->retiredPresentElements) {
-            for (usize j = 0; j < keepCount; ++j) {
-                const usize oldSlot = (oldIndex - keepCount + j + oldCapacity * 2) % oldCapacity;
-                newRetiredPresentElements[j] = self->retiredPresentElements[oldSlot];
-            }
-        }
-
-        if (self->retiredPresentElements && oldCount > keepCount) {
-            for (usize k = 0; k < oldCount - keepCount; ++k) {
-                const usize oldSlot = (oldIndex - oldCount + k + oldCapacity * 2) % oldCapacity;
-                if (self->retiredPresentElements[oldSlot]) {
-                    auto* const evictedSpan = self->retiredPresentElements[oldSlot];
-                    self->retiredPresentElements[oldSlot] = nullptr;
-
-                    if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED)) {
-                        if (self->sparePresentElementsSpan) {
-                            if (self->sparePresentElementsSpan->capacity >= evictedSpan->capacity) {
-                                if (evictedSpan->elements) {
-                                    free((void*) evictedSpan->elements);
-                                }
-                                free(evictedSpan);
-                            } else {
-                                if (self->sparePresentElementsSpan->elements) {
-                                    free((void*) self->sparePresentElementsSpan->elements);
-                                }
-                                free(self->sparePresentElementsSpan);
-                                self->sparePresentElementsSpan = evictedSpan;
-                            }
-                        } else {
-                            self->sparePresentElementsSpan = evictedSpan;
-                        }
-                    } else {
-                        if (evictedSpan->elements) {
-                            free((void*) evictedSpan->elements);
-                        }
-                        free(evictedSpan);
-                    }
-                }
-            }
-        }
-
-        if (self->retiredPresentElements) {
-            free(self->retiredPresentElements);
-        }
-
-        self->retiredPresentElements = newRetiredPresentElements;
-        self->retiredPresentElementsCapacity = inRetiredPresentElementsCapacity;
-        self->retiredPresentElementCount = keepCount;
-        self->retiredPresentElementIndex = (inRetiredPresentElementsCapacity > 0) ? (keepCount % inRetiredPresentElementsCapacity) : 0;
-
-        Mutex_unlock(&self->mergeMutex);
-
-        return true;
-    }
     auto IMPList_configurePropagation(IMPList* const self, const u64 inPollingIntervalMs, const u64 inBackoffIntervalMs) -> bool {
         using namespace foundation::primitive;
 
@@ -965,7 +851,7 @@ namespace Catelier::src::architecture::imp {
         AtomicBool_store(&self->isPresentElementsSpanRecyclingEnabled, inIsPresentElementsSpanRecyclingEnabled, MemoryOrder::RELEASE);
 
         if (!inIsPresentElementsSpanRecyclingEnabled) {
-            Mutex_lock(&self->mergeMutex);
+            SpinMutex_lock(&self->presentElementsSpanLock);
 
             if (self->sparePresentElementsSpan) {
                 if (self->sparePresentElementsSpan->elements) {
@@ -975,7 +861,7 @@ namespace Catelier::src::architecture::imp {
                 self->sparePresentElementsSpan = nullptr;
             }
 
-            Mutex_unlock(&self->mergeMutex);
+            SpinMutex_unlock(&self->presentElementsSpanLock);
         }
 
         return true;
@@ -1067,16 +953,7 @@ namespace Catelier::src::architecture::imp {
             return 0;
         }
 
-        while (true) {
-            while (AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&((IMPList*) self)->sealedChunksLock);
 
         usize total = 0;
 
@@ -1099,7 +976,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&((IMPList*) self)->sealedChunksLock);
 
         return total;
     }
@@ -1111,16 +988,7 @@ namespace Catelier::src::architecture::imp {
             return 0;
         }
 
-        while (true) {
-            while (AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&((IMPList*) self)->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&((IMPList*) self)->sealedChunksLock);
 
         usize total = 0;
 
@@ -1138,7 +1006,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&((IMPList*) self)->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&((IMPList*) self)->sealedChunksLock);
 
         return total;
     }
@@ -1209,6 +1077,53 @@ namespace Catelier::src::architecture::imp {
         }
 
         return span->elements + ((span->count - 1) * self->elementSize);
+    }
+
+    auto IMPList_iteratorBegin(IMPList* const self, void** const outHandle, const u8** const outElements, usize* const outElementCount) -> bool {
+        using namespace foundation::primitive;
+
+        if (!self || !outHandle || !outElements || !outElementCount) {
+            return false;
+        }
+
+        *outHandle = nullptr;
+        *outElements = nullptr;
+        *outElementCount = 0;
+
+        SpinMutex_lock(&self->presentElementsSpanLock);
+
+        auto* const span = (IMPList::PresentElementsSpan*) AtomicPtr_load((void* const*) &self->presentElementsSpan, MemoryOrder::ACQUIRE);
+        if (!span) {
+            SpinMutex_unlock(&self->presentElementsSpanLock);
+            return true;
+        }
+
+        Atomic64_fetchAdd(&span->refCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+
+        SpinMutex_unlock(&self->presentElementsSpanLock);
+
+        *outHandle = (void*) span;
+        *outElements = span->elements;
+        *outElementCount = span->count;
+
+        return true;
+    }
+    auto IMPList_iteratorEnd(IMPList* const self, void* const handle) -> void {
+        using namespace foundation::primitive;
+
+        if (!self || !handle) {
+            return;
+        }
+
+        auto* const span = (IMPList::PresentElementsSpan*) handle;
+
+        SpinMutex_lock(&self->presentElementsSpanLock);
+
+        if (Atomic64_fetchSub(&span->refCount, 1, MemoryOrder::ACQUIRE_RELEASE) == 1) {
+            IMPList_recyclePresentElementsSpan(self, span);
+        }
+
+        SpinMutex_unlock(&self->presentElementsSpanLock);
     }
 
     auto IMPList_add(IMPList* const self, const void* inElement) -> bool {
@@ -1386,16 +1301,7 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
-        while (true) {
-            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1468,7 +1374,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1490,16 +1396,7 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
-        while (true) {
-            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1572,7 +1469,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1594,16 +1491,7 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
-        while (true) {
-            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1698,7 +1586,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1720,16 +1608,7 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
-        while (true) {
-            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1802,7 +1681,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1824,16 +1703,7 @@ namespace Catelier::src::architecture::imp {
             return false;
         }
 
-        while (true) {
-            while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                Thread_yield();
-            }
-            Atomic64_fetchAdd(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-            if (!AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE)) {
-                break;
-            }
-            Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
-        }
+        SpinMutex_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1900,7 +1770,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Atomic64_fetchSub(&self->sealedReaderCount, 1, MemoryOrder::ACQUIRE_RELEASE);
+        SpinMutex_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -2443,11 +2313,11 @@ namespace Catelier::src::architecture::imp {
         usize totalElementCount = 0;
         bool collectFailed = false;
 
+        SpinMutex_lock(&self->sealedChunksLock);
+
         for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
 
-            // 收集前 exchange isCorrupted，清理历史标记
-            // 收集期间若 remove 再次设 true，下面的 anyCorrupted 检查会捕获
             AtomicBool_exchange(&bundle->isCorrupted, false, MemoryOrder::ACQUIRE_RELEASE);
 
             if (isDiscardAll) {
@@ -2559,6 +2429,8 @@ namespace Catelier::src::architecture::imp {
         }
 
         if (collectFailed) {
+            SpinMutex_unlock(&self->sealedChunksLock);
+
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
             Mutex_lock(&self->awaitMergingMutex);
@@ -2616,6 +2488,8 @@ namespace Catelier::src::architecture::imp {
             if (self->mergeDiscardElementsCapacity < 16) {
                 auto* const newElements = (u8*) realloc(self->mergeDiscardElements, self->elementSize * 16);
                 if (!newElements) {
+                    SpinMutex_unlock(&self->sealedChunksLock);
+
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
                     Mutex_lock(&self->awaitMergingMutex);
@@ -2752,6 +2626,8 @@ namespace Catelier::src::architecture::imp {
         }
 
         if (discardCollectFailed) {
+            SpinMutex_unlock(&self->sealedChunksLock);
+
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
             Mutex_lock(&self->awaitMergingMutex);
@@ -2812,10 +2688,16 @@ namespace Catelier::src::architecture::imp {
         IMPList::PresentElementsSpan* newSpan = nullptr;
 
         if (totalElementCount > 0) {
+            SpinMutex_lock(&self->presentElementsSpanLock);
+
             if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED) && self->sparePresentElementsSpan) {
                 newSpan = self->sparePresentElementsSpan;
                 self->sparePresentElementsSpan = nullptr;
+            }
 
+            SpinMutex_unlock(&self->presentElementsSpanLock);
+
+            if (newSpan) {
                 if (newSpan->capacity < totalElementCount) {
                     auto* const grownElements = (u8*) realloc(newSpan->elements, self->elementSize * totalElementCount);
                     if (!grownElements) {
@@ -2840,6 +2722,8 @@ namespace Catelier::src::architecture::imp {
                     free(hashOccupied);
                     free(hashPointers);
 
+                    SpinMutex_unlock(&self->sealedChunksLock);
+
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
                     Mutex_lock(&self->awaitMergingMutex);
@@ -2863,6 +2747,8 @@ namespace Catelier::src::architecture::imp {
                     free(hashOccupied);
                     free(hashPointers);
 
+                    SpinMutex_unlock(&self->sealedChunksLock);
+
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
                     Mutex_lock(&self->awaitMergingMutex);
@@ -2882,6 +2768,7 @@ namespace Catelier::src::architecture::imp {
             }
 
             newSpan->count = 0;
+            newSpan->refCount = 1;
 
             auto* const newPresentElements = newSpan->elements;
 
@@ -2980,29 +2867,7 @@ namespace Catelier::src::architecture::imp {
             }
 
             if (writeIndex == 0) {
-                if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED)) {
-                    if (self->sparePresentElementsSpan) {
-                        if (self->sparePresentElementsSpan->capacity >= newSpan->capacity) {
-                            if (newSpan->elements) {
-                                free((void*) newSpan->elements);
-                            }
-                            free(newSpan);
-                        } else {
-                            if (self->sparePresentElementsSpan->elements) {
-                                free((void*) self->sparePresentElementsSpan->elements);
-                            }
-                            free(self->sparePresentElementsSpan);
-                            self->sparePresentElementsSpan = newSpan;
-                        }
-                    } else {
-                        self->sparePresentElementsSpan = newSpan;
-                    }
-                } else {
-                    if (newSpan->elements) {
-                        free((void*) newSpan->elements);
-                    }
-                    free(newSpan);
-                }
+                IMPList_recyclePresentElementsSpan(self, newSpan);
                 newSpan = nullptr;
             } else {
                 if (self->elementSortingStrategy != IMPList_ElementSortingStrategy::UNORDERED && self->elementSortingComparator) {
@@ -3024,6 +2889,8 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
+        SpinMutex_unlock(&self->sealedChunksLock);
+
         free(hashKeys);
         free(hashOccupied);
         free(hashPointers);
@@ -3034,9 +2901,17 @@ namespace Catelier::src::architecture::imp {
 
         Mutex_lock(&self->mergeMutex);
 
-        IMPList_retirePresentElements(self);
+        SpinMutex_lock(&self->presentElementsSpanLock);
 
-        AtomicPtr_store((void**) &self->presentElementsSpan, (void*) newSpan, MemoryOrder::RELEASE);
+        auto* const oldSpan = (IMPList::PresentElementsSpan*) AtomicPtr_exchange((void**) &self->presentElementsSpan, (void*) newSpan, MemoryOrder::ACQUIRE_RELEASE);
+
+        if (oldSpan) {
+            if (Atomic64_fetchSub(&oldSpan->refCount, 1, MemoryOrder::ACQUIRE_RELEASE) == 1) {
+                IMPList_recyclePresentElementsSpan(self, oldSpan);
+            }
+        }
+
+        SpinMutex_unlock(&self->presentElementsSpanLock);
 
         Mutex_unlock(&self->mergeMutex);
 
@@ -3140,9 +3015,7 @@ namespace Catelier::src::architecture::imp {
 
         AtomicBool_store(&self->isCompactionSignaled, false, MemoryOrder::RELAXED);
 
-        while (Atomic64_load(&self->sealedReaderCount, MemoryOrder::ACQUIRE) > 0) {
-            Thread_yield();
-        }
+        SpinMutex_lock(&self->sealedChunksLock);
 
         for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
@@ -3188,6 +3061,8 @@ namespace Catelier::src::architecture::imp {
                 node = ConcurrentUnboundedQueueNode_next(node);
             }
         }
+
+        SpinMutex_unlock(&self->sealedChunksLock);
 
         Atomic64_store(&self->lastCompactionDurationMs, Time_currentMs() - compactionStartTimeMs, MemoryOrder::RELAXED);
         Atomic64_fetchAdd(&self->compactionCount, 1, MemoryOrder::RELAXED);

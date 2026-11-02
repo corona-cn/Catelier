@@ -17,7 +17,6 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_destruct(IMPList* self) -> bool;
     auto IMPList_copy(const IMPList* self) -> IMPList*;
 
-    auto IMPList_configureRetirement(IMPList* self, usize inRetiredPresentElementsCapacity) -> bool;
     auto IMPList_configurePropagation(IMPList* self, u64 inPollingIntervalMs, u64 inBackoffIntervalMs) -> bool;
     auto IMPList_configureMaintenanceMerging(IMPList* self, bool inIsMaintenanceMergingEnabled) -> bool;
     auto IMPList_configurePresentElementsSpanRecycling(IMPList* self, bool inIsPresentElementsSpanRecyclingEnabled) -> bool;
@@ -37,6 +36,9 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_get(const IMPList* self, usize index) -> const void*;
     auto IMPList_first(const IMPList* self) -> const void*;
     auto IMPList_last(const IMPList* self) -> const void*;
+
+    auto IMPList_iteratorBegin(IMPList* self, void** outHandle, const u8** outElements, usize* outElementCount) -> bool;
+    auto IMPList_iteratorEnd(IMPList* self, void* handle) -> void;
 
     auto IMPList_add(IMPList* self, const void* inElement) -> bool;
     auto IMPList_addAll(IMPList* self, const void* inElements, usize inElementCount) -> bool;

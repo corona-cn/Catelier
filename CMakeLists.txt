@@ -142,6 +142,9 @@ add_executable(Catelier
 	"src/catelier/foundation/concurrency/ThreadLocalTable.hpp"
 	include/catelier/foundation/concurrency/ThreadLocalTable.hpp
 	src/catelier/foundation/concurrency/ThreadLocalTable.cpp
+	src/catelier/foundation/primitive/SpinMutex.hpp
+	src/catelier/foundation/primitive/SpinMutex.cpp
+	include/catelier/foundation/primitive/SpinMutex.hpp
 )
 
 

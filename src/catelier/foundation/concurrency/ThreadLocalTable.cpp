@@ -152,7 +152,40 @@ namespace Catelier::src::foundation::concurrency {
 
         #endif
 
-        auto threadExitCallback(void* inRegistry) -> void;
+        auto threadExitCallback(void* const inRegistry) -> void {
+            auto* const registry = (Registry*) inRegistry;
+            if (!registry) {
+                return;
+            }
+
+            primitive::Mutex_lock(&lifetimeLock);
+
+            for (usize i = 0; i < registry->bucketCount; ++i) {
+                ThreadLocalTableEntry** link = &registry->buckets[i];
+                while (*link) {
+                    ThreadLocalTableEntry* const entry = *link;
+
+                    ThreadLocalTable* const owner = entry->owner;
+                    if (!owner) {
+                        *link = entry->nextInBucket;
+                        free(entry);
+                        continue;
+                    }
+
+                    entry->isThreadExited = true;
+
+                    if (owner->valueThreadExitCallback) {
+                        entry->value = owner->valueThreadExitCallback(entry->value, owner->hostContext);
+                    }
+
+                    link = &entry->nextInBucket;
+                }
+            }
+
+            primitive::Mutex_unlock(&lifetimeLock);
+
+            Registry_destroy(registry);
+        }
 
         auto initGlobalState() -> void {
             primitive::Mutex_init(&lifetimeLock);
@@ -182,15 +215,6 @@ namespace Catelier::src::foundation::concurrency {
             globalRegistryValid = true;
         }
 
-        #ifdef _WIN32
-
-        auto CALLBACK initGlobalStateBridge(PINIT_ONCE, PVOID, PVOID*) -> BOOL {
-            initGlobalState();
-            return TRUE;
-        }
-
-        #endif
-
         auto getRegistry() -> Registry* {
             if (!globalRegistryValid) {
                 return nullptr;
@@ -216,45 +240,6 @@ namespace Catelier::src::foundation::concurrency {
         }
     }
 
-    namespace {
-        auto threadExitCallback(void* const inRegistry) -> void {
-            auto* const registry = (Registry*) inRegistry;
-            if (!registry) {
-                return;
-            }
-
-            for (usize i = 0; i < registry->bucketCount; ++i) {
-                ThreadLocalTableEntry* entry = registry->buckets[i];
-                while (entry) {
-                    ThreadLocalTableEntry* const next = entry->nextInBucket;
-
-                    primitive::Mutex_lock(&lifetimeLock);
-
-                    ThreadLocalTable* const owner = entry->owner;
-                    if (!owner) {
-                        primitive::Mutex_unlock(&lifetimeLock);
-
-                        free(entry);
-                        entry = next;
-                        continue;
-                    }
-
-                    entry->isThreadExited = true;
-
-                    if (owner->valueThreadExitCallback) {
-                        entry->value = owner->valueThreadExitCallback(entry->value, owner->hostContext);
-                    }
-
-                    primitive::Mutex_unlock(&lifetimeLock);
-
-                    entry = next;
-                }
-            }
-
-            Registry_destroy(registry);
-        }
-    }
-
     auto ThreadLocalTable_construct(ThreadLocalTable* const self, void* (*inCreateValueCallback)(void* hostContext), void* (*inValueThreadExitCallback)(void* value, void* hostContext), void (*inDestroyValueCallback)(void* value, void* hostContext), void* const inHostContext) -> bool {
         if (!self || !inCreateValueCallback) {
             return false;
@@ -262,7 +247,14 @@ namespace Catelier::src::foundation::concurrency {
 
         #ifdef _WIN32
 
-        InitOnceExecuteOnce(&globalRegistryOnce, initGlobalStateBridge, nullptr, nullptr);
+        InitOnceExecuteOnce(
+            &globalRegistryOnce,
+            (PINIT_ONCE_FN) (+[](PINIT_ONCE, PVOID, PVOID*) -> BOOL {
+                initGlobalState();
+                return TRUE;
+            }),
+            nullptr, nullptr
+        );
 
         #else
 

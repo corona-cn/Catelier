@@ -1,5 +1,6 @@
 #pragma once
 #include <cassert>
+#include <utility>
 
 #include "../../../../src/catelier/architecture/imp/IMPList.hpp"
 
@@ -9,8 +10,53 @@ namespace Catelier::include::architecture::imp {
         public:
             class ConstIterator {
                 public:
-                    explicit ConstIterator(const ElementType* inPtr = nullptr) {
+                    explicit ConstIterator(
+                        src::architecture::imp::IMPList* inListHandle = nullptr,
+                        void* inSpanHandle = nullptr,
+                        const ElementType* inPtr = nullptr,
+                        const ElementType* inEndPtr = nullptr,
+                        bool inOwnsSpanHandle = false
+                    ) {
+                        this->listHandle = inListHandle;
+                        this->spanHandle = inSpanHandle;
                         this->ptr = inPtr;
+                        this->endPtr = inEndPtr;
+                        this->ownsSpanHandle = inOwnsSpanHandle;
+                    }
+                    ~ConstIterator() {
+                        if (this->ownsSpanHandle && this->spanHandle) {
+                            src::architecture::imp::IMPList_iteratorEnd(this->listHandle, this->spanHandle);
+                        }
+                    }
+                    ConstIterator(const ConstIterator&) = delete;
+                    ConstIterator& operator = (const ConstIterator&) = delete;
+                    ConstIterator(ConstIterator&& other) noexcept {
+                        this->listHandle = other.listHandle;
+                        this->spanHandle = other.spanHandle;
+                        this->ptr = other.ptr;
+                        this->endPtr = other.endPtr;
+                        this->ownsSpanHandle = other.ownsSpanHandle;
+
+                        other.spanHandle = nullptr;
+                        other.ownsSpanHandle = false;
+                    }
+                    ConstIterator& operator = (ConstIterator&& other) noexcept {
+                        if (this != &other) {
+                            if (this->ownsSpanHandle && this->spanHandle) {
+                                src::architecture::imp::IMPList_iteratorEnd(this->listHandle, this->spanHandle);
+                            }
+
+                            this->listHandle = other.listHandle;
+                            this->spanHandle = other.spanHandle;
+                            this->ptr = other.ptr;
+                            this->endPtr = other.endPtr;
+                            this->ownsSpanHandle = other.ownsSpanHandle;
+
+                            other.spanHandle = nullptr;
+                            other.ownsSpanHandle = false;
+                        }
+
+                        return *this;
                     }
 
                     auto operator * () const -> const ElementType& {
@@ -25,20 +71,35 @@ namespace Catelier::include::architecture::imp {
                         return *this;
                     }
                     auto operator ++ (int) -> ConstIterator {
-                        ConstIterator temp = *this;
+                        ConstIterator temp = std::move(*this);
                         ++this->ptr;
-                        return temp;
+                        this->spanHandle = temp.spanHandle;
+                        this->ownsSpanHandle = temp.ownsSpanHandle;
+                        temp.spanHandle = nullptr;
+                        temp.ownsSpanHandle = false;
+                        return ConstIterator(this->listHandle, nullptr, temp.ptr, temp.endPtr, false);
                     }
 
                     auto operator == (const ConstIterator& other) const -> bool {
+                        const bool thisIsAtEnd = (this->ptr == nullptr) || (this->ptr == this->endPtr);
+                        const bool otherIsAtEnd = (other.ptr == nullptr) || (other.ptr == other.endPtr);
+
+                        if (thisIsAtEnd || otherIsAtEnd) {
+                            return thisIsAtEnd == otherIsAtEnd;
+                        }
+
                         return this->ptr == other.ptr;
                     }
                     auto operator != (const ConstIterator& other) const -> bool {
-                        return this->ptr != other.ptr;
+                        return !(*this == other);
                     }
 
                 private:
+                    src::architecture::imp::IMPList* listHandle;
+                    void* spanHandle;
                     const ElementType* ptr;
+                    const ElementType* endPtr;
+                    bool ownsSpanHandle;
             };
 
             auto isValid() const -> bool {
@@ -104,15 +165,6 @@ namespace Catelier::include::architecture::imp {
                 }
 
                 return src::architecture::imp::IMPList_configurePropagation(this->handle, inPollingIntervalMs, inBackoffIntervalMs);
-            }
-            auto configureRetirement(const usize inRetiredPresentElementsCapacity) -> bool {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return false;
-                }
-
-                return src::architecture::imp::IMPList_configureRetirement(this->handle, inRetiredPresentElementsCapacity);
             }
             auto configureMaintenanceMerging(const bool inIsMaintenanceMergingEnabled) -> bool {
                 assert(this->handle != nullptr);
@@ -266,6 +318,153 @@ namespace Catelier::include::architecture::imp {
                 return (const ElementType*) src::architecture::imp::IMPList_last(this->handle);
             }
 
+            auto begin() const -> ConstIterator {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return ConstIterator();
+                }
+
+                void* spanHandle = nullptr;
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_iteratorBegin(this->handle, &spanHandle, &rawElements, &rawElementCount)) {
+                    return ConstIterator();
+                }
+
+                const auto* const beginPtr = (const ElementType*) rawElements;
+                const auto* const endPtr = beginPtr + rawElementCount;
+
+                return ConstIterator(this->handle, spanHandle, beginPtr, endPtr, true);
+            }
+            auto end() const -> ConstIterator {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return ConstIterator();
+                }
+
+                return ConstIterator(this->handle, nullptr, nullptr, nullptr, false);
+            }
+
+            template<typename Function>
+            auto forEach(Function inFunction) const -> void {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return;
+                }
+
+                void* spanHandle = nullptr;
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_iteratorBegin(this->handle, &spanHandle, &rawElements, &rawElementCount)) {
+                    return;
+                }
+
+                const auto* const presentElements = (const ElementType*) rawElements;
+                const usize presentElementCount = rawElementCount;
+                for (usize i = 0; i < presentElementCount; ++i) {
+                    inFunction(presentElements[i]);
+                }
+
+                if (spanHandle) {
+                    src::architecture::imp::IMPList_iteratorEnd(this->handle, spanHandle);
+                }
+            }
+            template<typename Function>
+            auto forEachIndexed(Function inFunction) const -> void {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return;
+                }
+
+                void* spanHandle = nullptr;
+                const u8* rawElements = nullptr;
+                usize rawElementCount = 0;
+
+                if (!src::architecture::imp::IMPList_iteratorBegin(this->handle, &spanHandle, &rawElements, &rawElementCount)) {
+                    return;
+                }
+
+                const auto* const presentElements = (const ElementType*) rawElements;
+                const usize presentElementCount = rawElementCount;
+                for (usize i = 0; i < presentElementCount; ++i) {
+                    inFunction(i, presentElements[i]);
+                }
+
+                if (spanHandle) {
+                    src::architecture::imp::IMPList_iteratorEnd(this->handle, spanHandle);
+                }
+            }
+
+            auto find(const ElementType& inElement) const -> const ElementType* {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return nullptr;
+                }
+
+                return (const ElementType*) src::architecture::imp::IMPList_find(this->handle, &inElement);
+            }
+            auto contains(const ElementType& inElement) const -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_contains(this->handle, &inElement);
+            }
+            auto containsAll(const ElementType* inElements, const usize inElementCount) const -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_containsAll(this->handle, inElements, inElementCount);
+            }
+            auto firstIndexOf(const ElementType& inElement) const -> ssize {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return -1;
+                }
+
+                return src::architecture::imp::IMPList_firstIndexOf(this->handle, &inElement);
+            }
+            auto lastIndexOf(const ElementType& inElement) const -> ssize {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return -1;
+                }
+
+                return src::architecture::imp::IMPList_lastIndexOf(this->handle, &inElement);
+            }
+            auto isEmpty() const -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return true;
+                }
+
+                return src::architecture::imp::IMPList_isEmpty(this->handle);
+            }
+            auto isNotEmpty() const -> bool {
+                assert(this->handle != nullptr);
+
+                if (!this->handle) {
+                    return false;
+                }
+
+                return src::architecture::imp::IMPList_isNotEmpty(this->handle);
+            }
+
             auto add(const ElementType& inElement) -> bool {
                 assert(this->handle != nullptr);
 
@@ -355,142 +554,6 @@ namespace Catelier::include::architecture::imp {
                 }
 
                 return src::architecture::imp::IMPList_discardAll(this->handle);
-            }
-
-            auto begin() const -> ConstIterator {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return ConstIterator(nullptr);
-                }
-
-                const u8* rawElements = nullptr;
-                usize rawElementCount = 0;
-
-                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
-                    return ConstIterator(nullptr);
-                }
-
-                this->presentElementsBegin = (const ElementType*) rawElements;
-                this->presentElementsEnd = this->presentElementsBegin + rawElementCount;
-
-                return ConstIterator(this->presentElementsBegin);
-            }
-            auto end() const -> ConstIterator {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return ConstIterator(nullptr);
-                }
-
-                return ConstIterator(this->presentElementsEnd);
-            }
-
-            template<typename Function>
-            auto forEach(Function inFunction) const -> void {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return;
-                }
-
-                const u8* rawElements = nullptr;
-                usize rawElementCount = 0;
-
-                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
-                    return;
-                }
-
-                const auto* const presentElements = (const ElementType*) rawElements;
-                const usize presentElementCount = rawElementCount;
-                for (usize i = 0; i < presentElementCount; ++i) {
-                    inFunction(presentElements[i]);
-                }
-            }
-            template<typename Function>
-            auto forEachIndexed(Function inFunction) const -> void {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return;
-                }
-
-                const u8* rawElements = nullptr;
-                usize rawElementCount = 0;
-
-                if (!src::architecture::imp::IMPList_presentElementsSpan(this->handle, &rawElements, &rawElementCount)) {
-                    return;
-                }
-
-                const auto* const presentElements = (const ElementType*) rawElements;
-                const usize presentElementCount = rawElementCount;
-                for (usize i = 0; i < presentElementCount; ++i) {
-                    inFunction(i, presentElements[i]);
-                }
-            }
-
-            auto find(const ElementType& inElement) const -> const ElementType* {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return nullptr;
-                }
-
-                return (const ElementType*) src::architecture::imp::IMPList_find(this->handle, &inElement);
-            }
-            auto contains(const ElementType& inElement) const -> bool {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return false;
-                }
-
-                return src::architecture::imp::IMPList_contains(this->handle, &inElement);
-            }
-            auto containsAll(const ElementType* inElements, const usize inElementCount) const -> bool {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return false;
-                }
-
-                return src::architecture::imp::IMPList_containsAll(this->handle, inElements, inElementCount);
-            }
-            auto firstIndexOf(const ElementType& inElement) const -> ssize {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return -1;
-                }
-
-                return src::architecture::imp::IMPList_firstIndexOf(this->handle, &inElement);
-            }
-            auto lastIndexOf(const ElementType& inElement) const -> ssize {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return -1;
-                }
-
-                return src::architecture::imp::IMPList_lastIndexOf(this->handle, &inElement);
-            }
-            auto isEmpty() const -> bool {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return true;
-                }
-
-                return src::architecture::imp::IMPList_isEmpty(this->handle);
-            }
-            auto isNotEmpty() const -> bool {
-                assert(this->handle != nullptr);
-
-                if (!this->handle) {
-                    return false;
-                }
-
-                return src::architecture::imp::IMPList_isNotEmpty(this->handle);
             }
 
             template<typename Comparer>
@@ -586,9 +649,6 @@ namespace Catelier::include::architecture::imp {
 
         private:
             src::architecture::imp::IMPList* handle = nullptr;
-
-            mutable const ElementType* presentElementsBegin = nullptr;
-            mutable const ElementType* presentElementsEnd = nullptr;
 
             template<typename Predicate>
             static auto predicateBridge(const void* inElement, void* inPredicateContext) -> bool {
