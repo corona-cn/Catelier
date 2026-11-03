@@ -1,7 +1,6 @@
 #pragma once
 #include <iostream>
 #include <cstdio>
-#include <cstring>
 #include <cctype>
 
 #include "../../../src/catelier/CommonPrimitives.hpp"

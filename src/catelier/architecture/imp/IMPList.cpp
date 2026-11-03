@@ -2263,8 +2263,6 @@ namespace Catelier::src::architecture::imp {
 
         AtomicBool_store(&self->isMergeSignaled, false, MemoryOrder::RELAXED);
 
-        const bool isDiscardAll = AtomicBool_load(&self->isDiscardAllSignaled, MemoryOrder::ACQUIRE);
-
         if (self->mergeSourceCapacity < 16) {
             auto* const newChunks = (ElementChunk**) realloc(self->mergeSourceChunks, sizeof(ElementChunk*) * 16);
             if (!newChunks) {
@@ -2304,6 +2302,8 @@ namespace Catelier::src::architecture::imp {
 
             self->mergeSourceCapacity = 16;
         }
+
+        const bool isDiscardAll = AtomicBool_exchange(&self->isDiscardAllSignaled, false, MemoryOrder::ACQUIRE_RELEASE);
 
         ElementChunk** sourceChunks = self->mergeSourceChunks;
         usize* sourceElementCounts = self->mergeSourceElementCounts;
@@ -2429,6 +2429,10 @@ namespace Catelier::src::architecture::imp {
         }
 
         if (collectFailed) {
+            if (isDiscardAll) {
+                AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
+            }
+
             SpinMutex_unlock(&self->sealedChunksLock);
 
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
@@ -2488,6 +2492,10 @@ namespace Catelier::src::architecture::imp {
             if (self->mergeDiscardElementsCapacity < 16) {
                 auto* const newElements = (u8*) realloc(self->mergeDiscardElements, self->elementSize * 16);
                 if (!newElements) {
+                    if (isDiscardAll) {
+                        AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
+                    }
+
                     SpinMutex_unlock(&self->sealedChunksLock);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
@@ -2626,6 +2634,10 @@ namespace Catelier::src::architecture::imp {
         }
 
         if (discardCollectFailed) {
+            if (isDiscardAll) {
+                AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
+            }
+
             SpinMutex_unlock(&self->sealedChunksLock);
 
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
@@ -2722,6 +2734,10 @@ namespace Catelier::src::architecture::imp {
                     free(hashOccupied);
                     free(hashPointers);
 
+                    if (isDiscardAll) {
+                        AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
+                    }
+
                     SpinMutex_unlock(&self->sealedChunksLock);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
@@ -2746,6 +2762,10 @@ namespace Catelier::src::architecture::imp {
                     free(hashKeys);
                     free(hashOccupied);
                     free(hashPointers);
+
+                    if (isDiscardAll) {
+                        AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
+                    }
 
                     SpinMutex_unlock(&self->sealedChunksLock);
 
@@ -2894,10 +2914,6 @@ namespace Catelier::src::architecture::imp {
         free(hashKeys);
         free(hashOccupied);
         free(hashPointers);
-
-        if (isDiscardAll) {
-            AtomicBool_store(&self->isDiscardAllSignaled, false, MemoryOrder::RELEASE);
-        }
 
         Mutex_lock(&self->mergeMutex);
 

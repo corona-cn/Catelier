@@ -29,6 +29,19 @@ if(MSVC)
 endif()
 
 
+# === 引入第三方库 === #
+include(FetchContent)
+
+# nanobench #
+FetchContent_Declare(
+	nanobench
+	GIT_REPOSITORY https://github.com/martinus/nanobench.git
+	GIT_TAG v4.3.11
+	GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(nanobench)
+
+
 # === 配置项目文件 === #
 add_executable(Catelier
 	test/catelier/Main.cpp
@@ -145,6 +158,12 @@ add_executable(Catelier
 	src/catelier/foundation/primitive/SpinMutex.hpp
 	src/catelier/foundation/primitive/SpinMutex.cpp
 	include/catelier/foundation/primitive/SpinMutex.hpp
+)
+
+
+# === 链接第三方库 === #
+target_link_libraries(Catelier PRIVATE
+	nanobench
 )
 
 

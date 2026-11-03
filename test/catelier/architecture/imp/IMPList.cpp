@@ -5,6 +5,9 @@
 #include <atomic>
 #include <vector>
 #include <chrono>
+#include <fstream>
+
+#include <nanobench.h>
 
 #include "../../util/Logger.hpp"
 
@@ -13,10 +16,6 @@
 namespace Catelier::test::architecture::imp {
     namespace {
         using namespace Catelier::include::architecture::imp;
-
-        constexpr u32 BENCH_TRIALS = 101;
-        constexpr u64 kWarmupNs = 200000000ULL;
-        constexpr u64 kMeasureNs = 800000000ULL;
 
         auto intEvenPredicate(const int& x) -> bool {
             return x % 2 == 0;
@@ -28,411 +27,8 @@ namespace Catelier::test::architecture::imp {
             return x;
         }
 
-        auto sortU64(u64* data, const u32 count) -> void {
-            for (u32 i = 0; i < count; ++i) {
-                for (u32 j = i + 1; j < count; ++j) {
-                    if (data[i] > data[j]) {
-                        const u64 tmp = data[i];
-                        data[i] = data[j];
-                        data[j] = tmp;
-                    }
-                }
-            }
-        }
-        auto meanOf(const u64* data, const u32 start, const u32 end) -> double {
-            if (end <= start) {
-                return 0.0;
-            }
-
-            u64 sum = 0;
-            for (u32 i = start; i < end; ++i) {
-                sum += data[i];
-            }
-
-            return (double) sum / (double) (end - start);
-        }
-        auto stddevOf(const u64* data, const u32 start, const u32 end, const double mean) -> double {
-            if (end <= start) {
-                return 0.0;
-            }
-
-            double accum = 0.0;
-            for (u32 i = start; i < end; ++i) {
-                const double d = (double) data[i] - mean;
-                accum += d * d;
-            }
-
-            return std::sqrt(accum / (double) (end - start));
-        }
-
-        auto computePercentile(const u64* sortedData, const u32 count, const double percentile) -> u64 {
-            if (count == 0) {
-                return 0;
-            }
-            if (count == 1) {
-                return sortedData[0];
-            }
-
-            const double rank = percentile * (double) (count - 1);
-            const u32 lowerIndex = (u32) rank;
-            const u32 upperIndex = (lowerIndex + 1 >= count) ? (count - 1) : (lowerIndex + 1);
-            const double weight = rank - (double) lowerIndex;
-
-            return (u64) ((double) sortedData[lowerIndex] * (1.0 - weight) + (double) sortedData[upperIndex] * weight);
-        }
-
-        auto filterOutliers(
-            const u64* rawData,
-            const u32 rawCount,
-            u64* outFilteredData,
-            u32* outFilteredCount,
-            const double inLowerIqrMultiplier,
-            const double inUpperIqrMultiplier
-        ) -> void {
-            if (!rawData || !outFilteredData || !outFilteredCount || rawCount == 0) {
-                if (outFilteredCount) {
-                    *outFilteredCount = 0;
-                }
-                return;
-            }
-
-            static u64 sortedCopy[4096];
-            const u32 copyCount = rawCount > 4096 ? 4096 : rawCount;
-
-            for (u32 i = 0; i < copyCount; ++i) {
-                sortedCopy[i] = rawData[i];
-            }
-            sortU64(sortedCopy, copyCount);
-
-            const u64 q1 = computePercentile(sortedCopy, copyCount, 0.25);
-            const u64 q3 = computePercentile(sortedCopy, copyCount, 0.75);
-            const double iqr = (double) q3 - (double) q1;
-
-            double lowerBound;
-            double upperBound;
-
-            if (iqr == 0.0) {
-                const u64 median = sortedCopy[copyCount / 2];
-                lowerBound = (double) median * 0.5;
-                upperBound = (double) median * 1.5 + 1.0;
-            } else {
-                lowerBound = (double) q1 - inLowerIqrMultiplier * iqr;
-                upperBound = (double) q3 + inUpperIqrMultiplier * iqr;
-
-                if (lowerBound < 0.0) {
-                    lowerBound = 0.0;
-                }
-            }
-
-            u32 filteredCount = 0;
-            for (u32 i = 0; i < rawCount; ++i) {
-                const double v = (double) rawData[i];
-                if (v >= lowerBound && v <= upperBound) {
-                    outFilteredData[filteredCount] = rawData[i];
-                    filteredCount++;
-                }
-            }
-
-            *outFilteredCount = filteredCount;
-        }
-
-        auto computeMeanSdIqr(
-            const u64* samples,
-            const u32 n,
-            double* outMean,
-            double* outSd,
-            u32* outKept
-        ) -> void {
-            static u64 filteredSamples[4096];
-            u32 kept = 0;
-            filterOutliers(samples, n, filteredSamples, &kept, 1.5, 2.0);
-
-            if (kept == 0) {
-                *outMean = meanOf(samples, 0, n);
-                *outSd = stddevOf(samples, 0, n, *outMean);
-                *outKept = n;
-            } else {
-                *outMean = meanOf(filteredSamples, 0, kept);
-                *outSd = stddevOf(filteredSamples, 0, kept, *outMean);
-                *outKept = kept;
-            }
-        }
-
-        auto meanIqr(const u64* samples, const u32 n) -> double {
-            double mean = 0.0;
-            double sd = 0.0;
-            u32 kept = 0;
-            computeMeanSdIqr(samples, n, &mean, &sd, &kept);
-            return mean;
-        }
-
-        auto computeTrialMeanWithIqr(
-            const u64* rawSubSamples,
-            const u32 subCount,
-            const double inLowerIqrMultiplier,
-            const double inUpperIqrMultiplier
-        ) -> u64 {
-            if (!rawSubSamples || subCount == 0) {
-                return 0;
-            }
-
-            static u64 sorted[4096];
-            const u32 n = subCount > 4096 ? 4096 : subCount;
-
-            for (u32 i = 0; i < n; ++i) {
-                sorted[i] = rawSubSamples[i];
-            }
-            sortU64(sorted, n);
-
-            const u64 q1 = computePercentile(sorted, n, 0.25);
-            const u64 q3 = computePercentile(sorted, n, 0.75);
-            const double iqr = (double) q3 - (double) q1;
-
-            // 子批间几乎无差异（正常稳态），直接返回中位数
-            if (iqr == 0.0) {
-                return sorted[n / 2];
-            }
-
-            double lowerBound = (double) q1 - inLowerIqrMultiplier * iqr;
-            const double upperBound = (double) q3 + inUpperIqrMultiplier * iqr;
-
-            if (lowerBound < 0.0) {
-                lowerBound = 0.0;
-            }
-
-            u64 sum = 0;
-            u32 keptCount = 0;
-            for (u32 i = 0; i < n; ++i) {
-                const double v = (double) sorted[i];
-                if (v >= lowerBound && v <= upperBound) {
-                    sum += sorted[i];
-                    keptCount++;
-                }
-            }
-
-            if (keptCount == 0) {
-                return sorted[n / 2];
-            }
-
-            return sum / keptCount;
-        }
-
-        class QpcTimer {
-            public:
-                explicit QpcTimer() {
-                    LARGE_INTEGER freq;
-                    QueryPerformanceFrequency(&freq);
-                    this->invFreqNs = 1000000000.0 / (double) freq.QuadPart;
-                }
-
-                auto start() -> void {
-                    QueryPerformanceCounter(&this->begin);
-                }
-
-                auto stopNs() -> u64 {
-                    LARGE_INTEGER end;
-                    QueryPerformanceCounter(&end);
-                    return (u64) ((double) (end.QuadPart - this->begin.QuadPart) * this->invFreqNs);
-                }
-
-            private:
-                LARGE_INTEGER begin = {};
-                double invFreqNs = 1.0;
-        };
-
-        class TscTimer {
-            public:
-                explicit TscTimer() {
-                    LARGE_INTEGER freq;
-                    LARGE_INTEGER t1;
-                    LARGE_INTEGER t2;
-                    QueryPerformanceFrequency(&freq);
-
-                    const double qpcInvFreqNs = 1000000000.0 / (double) freq.QuadPart;
-
-                    const u64 tscStart = __rdtsc();
-                    QueryPerformanceCounter(&t1);
-
-                    Sleep(100);
-
-                    const u64 tscEnd = __rdtsc();
-                    QueryPerformanceCounter(&t2);
-
-                    const double elapsedNs = (double) (t2.QuadPart - t1.QuadPart) * qpcInvFreqNs;
-                    const double elapsedTicks = (double) (tscEnd - tscStart);
-
-                    this->invTicksPerNs = elapsedNs / elapsedTicks;
-                }
-
-                auto start() -> void {
-                    _mm_lfence();
-                    this->begin = __rdtsc();
-                }
-
-                auto stopTicks() -> u64 {
-                    const u64 end = __rdtsc();
-                    _mm_lfence();
-                    return end - this->begin;
-                }
-
-                auto ticksToScaledNs(const u64 ticks, const double scale) const -> double {
-                    return (double) ticks * this->invTicksPerNs * scale;
-                }
-
-            private:
-                u64 begin = 0;
-                double invTicksPerNs = 1.0;
-        };
-
-        auto logPerOp(const char* label, const u64* samples, const u32 n, const double scale) -> void {
-            double meanRaw = 0.0;
-            double sdRaw = 0.0;
-            u32 kept = 0;
-            computeMeanSdIqr(samples, n, &meanRaw, &sdRaw, &kept);
-
-            const double meanNs = meanRaw / scale;
-            const double sdNs = sdRaw / scale;
-            const double minNs = (double) samples[0] / scale;
-            const double p50Ns = (double) computePercentile(samples, n, 0.50) / scale;
-            const double p90Ns = (double) computePercentile(samples, n, 0.90) / scale;
-            const double p99Ns = (double) computePercentile(samples, n, 0.99) / scale;
-            const double maxNs = (double) samples[n - 1] / scale;
-
-            LOG(label, "：平均 ", meanNs, " ns/op，标准差 ", sdNs, " ns，最小 ", minNs, " ns，P50 ", p50Ns, " ns，P90 ", p90Ns, " ns，P99 ", p99Ns, " ns，最大 ", maxNs, " ns（", n, " 轮，", kept, " 个样本通过 IQR）");
-        }
-
-        auto logThroughput(const char* label, const double nsPerOp, const double sdNs, const u64 totalOps) -> void {
-            const double opsPerSec = nsPerOp > 0.0 ? 1e9 / nsPerOp : 0.0;
-            LOG(label, "：", nsPerOp, " ns/op（", opsPerSec / 1e6, " M op/s），标准差 ", sdNs, " ns，总 ", totalOps, " 次");
-        }
-
-        auto logConcurrentMetrics(const int threads, const int readers, const int writers, const u64 totalROps, const u64 totalRElapsedNs, const u64 totalWOps, const u64 totalWElapsedNs) -> void {
-            double rOpsPerSec = 0.0;
-            double wOpsPerSec = 0.0;
-
-            if (readers > 0 && totalRElapsedNs > 0) {
-                rOpsPerSec = (double) totalROps / ((double) totalRElapsedNs / 1e9);
-            }
-            if (writers > 0 && totalWElapsedNs > 0) {
-                wOpsPerSec = (double) totalWOps / ((double) totalWElapsedNs / 1e9);
-            }
-
-            const double rNs = rOpsPerSec > 0.0 ? 1e9 / rOpsPerSec : 0.0;
-            const double wNs = wOpsPerSec > 0.0 ? 1e9 / wOpsPerSec : 0.0;
-
-            if (readers > 0 && writers > 0) {
-                LOG(threads, " 线程（", readers, " 读 ", writers, " 写）：读 ", rOpsPerSec / 1e6, " M op/s（", rNs, " ns/op），写 ", wOpsPerSec / 1e6, " M op/s（", wNs, " ns/op）");
-            } else if (readers > 0) {
-                LOG(threads, " 线程（纯读）：读 ", rOpsPerSec / 1e6, " M op/s（", rNs, " ns/op）");
-            } else if (writers > 0) {
-                LOG(threads, " 线程（纯写）：写 ", wOpsPerSec / 1e6, " M op/s（", wNs, " ns/op）");
-            }
-        }
-
-        struct ConcurrentTaskResult {
-            u64 ops;
-            u64 elapsedNs;
-        };
-
-        auto runConcurrentTask(IMPList<int>& list, const bool isReader, const u64 threadId, const u64 runNs, const u64 warmupNs) -> ConcurrentTaskResult {
-            QpcTimer timer;
-            u64 localOps = 0;
-            volatile int accum = 0;
-            int counter = (int) (threadId * 100000000);
-
-            timer.start();
-            while (true) {
-                if (isReader) {
-                    usize idx = 0;
-                    for (const auto& v : list) {
-                        accum += v;
-                        if (++idx >= 100) {
-                            break;
-                        }
-                    }
-                    localOps += (idx > 0) ? idx : 1;
-                } else {
-                    for (int k = 0; k < 100; ++k) {
-                        list.add(counter++);
-                    }
-                    localOps += 100;
-                }
-
-                if (localOps > 0 && (localOps & 4095) == 0) {
-                    if (timer.stopNs() >= warmupNs) {
-                        break;
-                    }
-                }
-            }
-
-            localOps = 0;
-            timer.start();
-            while (true) {
-                if (isReader) {
-                    usize idx = 0;
-                    for (const auto& v : list) {
-                        accum += v;
-                        if (++idx >= 100) {
-                            break;
-                        }
-                    }
-                    localOps += (idx > 0) ? idx : 1;
-                } else {
-                    for (int k = 0; k < 100; ++k) {
-                        list.add(counter++);
-                    }
-                    localOps += 100;
-                }
-
-                if (localOps > 0 && (localOps & 4095) == 0) {
-                    if (timer.stopNs() >= runNs) {
-                        break;
-                    }
-                }
-            }
-
-            u64 elapsedNs = timer.stopNs();
-
-            return { localOps, elapsedNs };
-        }
-
-        auto runConcurrentIteratorTask(IMPList<int>& list, const u64 threadId, const u64 runNs, const u64 warmupNs) -> ConcurrentTaskResult {
-            QpcTimer timer;
-            u64 localOps = 0;
-            volatile int accum = 0;
-            int counter = (int) (threadId * 100000000);
-
-            timer.start();
-            while (true) {
-                for (const auto& v : list) {
-                    accum += v;
-                }
-                localOps += 100;
-                if (localOps > 0 && (localOps & 4095) == 0) {
-                    if (timer.stopNs() >= warmupNs) {
-                        break;
-                    }
-                }
-            }
-
-            localOps = 0;
-            timer.start();
-            while (true) {
-                for (const auto& v : list) {
-                    accum += v;
-                }
-                localOps += 100;
-                if (localOps > 0 && (localOps & 4095) == 0) {
-                    if (timer.stopNs() >= runNs) {
-                        break;
-                    }
-                }
-            }
-
-            u64 elapsedNs = timer.stopNs();
-
-            return { localOps, elapsedNs };
-        }
+        // 全局的 Nanobench 对象，用于收集所有性能测试结果并最终导出 JSON
+        ankerl::nanobench::Bench globalBench;
     }
 
     namespace {
@@ -756,6 +352,43 @@ namespace Catelier::test::architecture::imp {
                 list.awaitMerging();
                 LOG("窗口结束后 add：present = ", list.presentElementCount(), "（应为 1）");
                 LOG("窗口结束后 add 正常保留：", list.presentElementCount() == 1 && *((const int*) list.get(0)) == 200 ? "PASS" : "FAIL");
+            }
+        }
+
+        auto testDiscardAllDuringMerge() -> void {
+            LOG("--- [正确性] discardAll 与并发 merge 的请求不丢失 ---");
+            LOGGER_INDENT_BLOCK(true) {
+                auto list = IMPList<int>(64, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
+
+                for (int i = 0; i < 1000; ++i) {
+                    list.add(i);
+                }
+
+                std::thread merger([&list]() {
+                    for (int round = 0; round < 10; ++round) {
+                        list.tryMerging();
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    }
+                });
+
+                list.discardAll();
+
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+
+                for (int i = 0; i < 100; ++i) {
+                    list.add(1000 + i);
+                }
+
+                list.discardAll();
+
+                merger.join();
+
+                list.awaitMerging();
+
+                LOG("两次 discardAll（中间 add 100）后 present = ", list.presentElementCount(), "（应为 0）");
+                LOG("第二次 discardAll 未丢失：", list.presentElementCount() == 0 ? "PASS" : "FAIL");
             }
         }
 
@@ -2372,1190 +2005,667 @@ namespace Catelier::test::architecture::imp {
         }
 
         // ============================================================
-        // [性能] 测试
+        // [性能] 测试（Nanobench）
         // ============================================================
 
         auto testBenchAddLatency() -> void {
-            LOG("--- [性能] 单线程 add 延迟（完整 CAS，跳过合并数据处理，带预热，trial 内子批 IQR 剔除 + 全局 IQR，TSC 计时） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                static u64 samples[BENCH_TRIALS];
-                constexpr u32 kBatch = 20000;
-                constexpr u32 kSubBatchSize = 100;
-                constexpr u32 kSubBatchCount = kBatch / kSubBatchSize;
+            LOG("--- [性能] 单线程 add 延迟 ---");
+            auto list = IMPList<int>(16384, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                static u64 subSamples[kSubBatchCount];
-                TscTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<int>(16384, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
-
-                    list.add(0);
-
-                    u32 writeIndex = 0;
-                    for (u32 s = 0; s < kSubBatchCount; ++s) {
-                        timer.start();
-                        for (u32 i = 0; i < kSubBatchSize; ++i) {
-                            list.add((int) (writeIndex++));
-                        }
-                        subSamples[s] = timer.stopTicks();
-                    }
-
-                    const u64 ticksMean = computeTrialMeanWithIqr(subSamples, kSubBatchCount, 1.5, 2.0);
-                    samples[t] = (u64) (timer.ticksToScaledNs(ticksMean, 10.0 / (double) kSubBatchSize) + 0.5);
+            globalBench.batch(1000).run("[基础] add 延迟", [&] {
+                for (int i = 0; i < 1000; ++i) {
+                    list.add(i);
                 }
-
-                sortU64(samples, BENCH_TRIALS);
-                logPerOp("add 延迟", samples, BENCH_TRIALS, 10.0);
-            }
+            });
         }
 
         auto testBenchDiscardLatency() -> void {
-            LOG("--- [性能] 单线程 discard 延迟（完整 CAS，跳过合并数据处理，带预热，trial 内子批 IQR 剔除 + 全局 IQR，TSC 计时） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                static u64 samples[BENCH_TRIALS];
-                constexpr u32 kBatch = 20000;
-                constexpr u32 kSubBatchSize = 100;
-                constexpr u32 kSubBatchCount = kBatch / kSubBatchSize;
+            LOG("--- [性能] 单线程 discard 延迟 ---");
+            auto list = IMPList<int>(16384, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                static u64 subSamples[kSubBatchCount];
-                TscTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<int>(16384, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
-
-                    list.discard(0);
-
-                    u32 writeIndex = 0;
-                    for (u32 s = 0; s < kSubBatchCount; ++s) {
-                        timer.start();
-                        for (u32 i = 0; i < kSubBatchSize; ++i) {
-                            list.discard((int) (writeIndex++));
-                        }
-                        subSamples[s] = timer.stopTicks();
-                    }
-
-                    const u64 ticksMean = computeTrialMeanWithIqr(subSamples, kSubBatchCount, 1.5, 2.0);
-                    samples[t] = (u64) (timer.ticksToScaledNs(ticksMean, 10.0 / (double) kSubBatchSize) + 0.5);
+            globalBench.batch(1000).run("[基础] discard 延迟", [&] {
+                for (int i = 0; i < 1000; ++i) {
+                    list.discard(i);
                 }
-
-                sortU64(samples, BENCH_TRIALS);
-                logPerOp("discard 延迟", samples, BENCH_TRIALS, 10.0);
-            }
+            });
         }
 
         auto testBenchDiscardAllLatency() -> void {
-            LOG("--- [性能] 单线程 discardAll 调用延迟（O(1) 标志设置，不含合并，带预热，trial 内子批 IQR 剔除 + 全局 IQR，TSC 计时） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                static u64 samples[BENCH_TRIALS];
-                constexpr u32 kBatch = 20000;
-                constexpr u32 kSubBatchSize = 100;
-                constexpr u32 kSubBatchCount = kBatch / kSubBatchSize;
+            LOG("--- [性能] 单线程 discardAll 延迟 ---");
+            auto list = IMPList<int>(16384, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                static u64 subSamples[kSubBatchCount];
-                TscTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<int>(16384, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
-
+            globalBench.batch(1000).run("[基础] discardAll 延迟", [&] {
+                for (int i = 0; i < 1000; ++i) {
                     list.discardAll();
-
-                    for (u32 s = 0; s < kSubBatchCount; ++s) {
-                        timer.start();
-                        for (u32 i = 0; i < kSubBatchSize; ++i) {
-                            list.discardAll();
-                        }
-                        subSamples[s] = timer.stopTicks();
-                    }
-
-                    const u64 ticksMean = computeTrialMeanWithIqr(subSamples, kSubBatchCount, 1.5, 2.0);
-                    samples[t] = (u64) (timer.ticksToScaledNs(ticksMean, 10.0 / (double) kSubBatchSize) + 0.5);
                 }
-
-                sortU64(samples, BENCH_TRIALS);
-                logPerOp("discardAll 调用延迟", samples, BENCH_TRIALS, 10.0);
-            }
+            });
         }
 
         auto testBenchAddMergeThroughput() -> void {
-            LOG("--- [性能] add + merge 混合吞吐（不同规模，检验线性） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 sizes[] = { 1000, 10000, 100000, 1000000 };
+            LOG("--- [性能] add + merge 混合吞吐 ---");
+            constexpr u32 n = 100000;
+            globalBench.batch(n).run("[基础] add + merge 吞吐", [&] {
+                auto list = IMPList<int>(1024, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
-                for (u32 n : sizes) {
-                    static u64 samples[BENCH_TRIALS];
-                    QpcTimer timer;
+                list.add(0);
+                list.tryMerging();
 
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 20, 10000);
-
-                        list.add(0);
-                        list.tryMerging();
-
-                        timer.start();
-                        for (u32 i = 0; i < n; ++i) {
-                            list.add((int) i);
-                        }
-                        list.tryMerging();
-                        samples[t] = timer.stopNs() * 100 / n;
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-                    logPerOp("add+merge 吞吐", samples, BENCH_TRIALS, 100.0);
+                for (u32 i = 0; i < n; ++i) {
+                    list.add((int) i);
                 }
-            }
+                list.tryMerging();
+                ankerl::nanobench::doNotOptimizeAway(list);
+            });
         }
 
         auto testBenchGetLatency() -> void {
             LOG("--- [性能] get 快照访问延迟 ---");
-            LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(1024, 1024);
-                list.configureMaintenanceMerging(false);
-                list.configureCompaction(false, 20, 10000);
+            auto list = IMPList<int>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                for (int i = 0; i < 100000; ++i) {
-                    list.add(i);
-                }
-                list.tryMerging();
-
-                static u64 samples[BENCH_TRIALS];
-                constexpr u32 kIters = 20000000;
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    int accum = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        const int* v = list.get((usize) (i % 100000));
-                        accum += *v;
-                    }
-                    samples[t] = timer.stopNs() * 10 / kIters;
-                    if (accum == 0xDEADBEEF) {
-                        LOG("impossible");
-                    }
-                }
-
-                sortU64(samples, BENCH_TRIALS);
-                logPerOp("get 延迟", samples, BENCH_TRIALS, 10.0);
+            for (int i = 0; i < 100000; ++i) {
+                list.add(i);
             }
+            list.tryMerging();
+
+            globalBench.batch(1000).run("[基础] get 延迟", [&] {
+                int accum = 0;
+                for (int k = 0; k < 1000; ++k) {
+                    const int* v = list.get(k % 100000);
+                    accum += *v;
+                }
+                ankerl::nanobench::doNotOptimizeAway(accum);
+            });
         }
 
         auto testBenchIteratorTraversal() -> void {
-            LOG("--- [性能] 迭代器整体遍历延迟（100 / 10000 / 1000000 元素） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 sizes[] = { 100, 10000, 1000000 };
+            LOG("--- [性能] 迭代器整体遍历延迟 ---");
+            constexpr u32 sizes[] = { 100, 10000, 1000000 };
 
-                for (u32 n : sizes) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
-
-                    for (u32 i = 0; i < n; ++i) {
-                        list.add((int) i);
-                    }
-                    list.tryMerging();
-
-                    static u64 samples[BENCH_TRIALS];
-                    QpcTimer timer;
-
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        timer.start();
-                        int accum = 0;
-                        for (const auto& v : list) {
-                            accum += v;
-                        }
-                        samples[t] = timer.stopNs();
-                        if (accum == 0xDEADBEEF) {
-                            LOG("impossible");
-                        }
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-
-                    double mean = 0.0;
-                    double sd = 0.0;
-                    u32 kept = 0;
-                    computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                    LOG("迭代器遍历 ", n, " 元素：平均 ", mean / 1000.0, " us（", mean / n, " ns/elem），标准差 ", sd / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us（", kept, " 个样本通过 IQR）");
-                }
-            }
-        }
-
-        auto testBenchIteratorBeginEnd() -> void {
-            LOG("--- [性能] 迭代器 begin/end 开销（不含遍历） ---");
-            LOGGER_INDENT_BLOCK(true) {
+            for (u32 n : sizes) {
                 auto list = IMPList<int>(1024, 1024);
                 list.configureMaintenanceMerging(false);
                 list.configureCompaction(false, 20, 10000);
 
-                for (int i = 0; i < 1000; ++i) {
-                    list.add(i);
-                }
-                list.tryMerging();
-
-                static u64 samples[BENCH_TRIALS];
-                constexpr u32 kIters = 1000000;
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    for (u32 i = 0; i < kIters; ++i) {
-                        auto it = list.begin();
-                        auto end = list.end();
-                        volatile bool nonEmpty = (it != end);
-                        (void) nonEmpty;
-                    }
-                    samples[t] = timer.stopNs() * 10 / kIters;
-                }
-
-                sortU64(samples, BENCH_TRIALS);
-                logPerOp("begin + end 开销", samples, BENCH_TRIALS, 10.0);
-            }
-        }
-
-        auto testBenchIteratorVsGet() -> void {
-            LOG("--- [性能] 迭代器 vs get(i) 循环对比（1 万元素） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                auto list = IMPList<int>(1024, 1024);
-                list.configureMaintenanceMerging(false);
-                list.configureCompaction(false, 20, 10000);
-
-                constexpr u32 kElements = 10000;
-                for (u32 i = 0; i < kElements; ++i) {
+                for (u32 i = 0; i < n; ++i) {
                     list.add((int) i);
                 }
                 list.tryMerging();
 
-                static u64 iterSamples[BENCH_TRIALS];
-                static u64 getSamples[BENCH_TRIALS];
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    int iterAccum = 0;
+                globalBench.batch(n).run(("[迭代器] 遍历 " + std::to_string(n) + " 元素").c_str(), [&] {
+                    int accum = 0;
                     for (const auto& v : list) {
-                        iterAccum += v;
+                        accum += v;
                     }
-                    iterSamples[t] = timer.stopNs();
+                    ankerl::nanobench::doNotOptimizeAway(accum);
+                });
+            }
+        }
 
-                    timer.start();
-                    int getAccum = 0;
-                    const usize count = list.presentElementCount();
-                    for (usize i = 0; i < count; ++i) {
-                        const int* v = list.get(i);
-                        if (v) {
-                            getAccum += *v;
-                        }
-                    }
-                    getSamples[t] = timer.stopNs();
+        auto testBenchIteratorBeginEnd() -> void {
+            LOG("--- [性能] 迭代器 begin/end 开销 ---");
+            auto list = IMPList<int>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                    if (iterAccum == 0xDEADBEEF || getAccum == 0xDEADBEEF) {
-                        LOG("impossible");
+            for (int i = 0; i < 1000; ++i) {
+                list.add(i);
+            }
+            list.tryMerging();
+
+            globalBench.batch(100).run("[迭代器] begin + end 开销", [&] {
+                for (int k = 0; k < 100; ++k) {
+                    auto it = list.begin();
+                    auto end = list.end();
+                    bool nonEmpty = (it != end);
+                    ankerl::nanobench::doNotOptimizeAway(nonEmpty);
+                }
+            });
+        }
+
+        auto testBenchIteratorVsGet() -> void {
+            LOG("--- [性能] 迭代器 vs get(i) 循环对比 ---");
+            auto list = IMPList<int>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
+
+            constexpr u32 kElements = 10000;
+            for (u32 i = 0; i < kElements; ++i) {
+                list.add((int) i);
+            }
+            list.tryMerging();
+
+            globalBench.batch(kElements).run("[迭代器] 迭代器遍历", [&] {
+                int accum = 0;
+                for (const auto& v : list) {
+                    accum += v;
+                }
+                ankerl::nanobench::doNotOptimizeAway(accum);
+            });
+
+            globalBench.batch(kElements).run("[迭代器] get(i) 循环", [&] {
+                int accum = 0;
+                const usize count = list.presentElementCount();
+                for (usize i = 0; i < count; ++i) {
+                    const int* v = list.get(i);
+                    if (v) {
+                        accum += *v;
                     }
                 }
-
-                sortU64(iterSamples, BENCH_TRIALS);
-                sortU64(getSamples, BENCH_TRIALS);
-
-                double iterMean = 0.0;
-                double iterSd = 0.0;
-                u32 iterKept = 0;
-                computeMeanSdIqr(iterSamples, BENCH_TRIALS, &iterMean, &iterSd, &iterKept);
-
-                double getMean = 0.0;
-                double getSd = 0.0;
-                u32 getKept = 0;
-                computeMeanSdIqr(getSamples, BENCH_TRIALS, &getMean, &getSd, &getKept);
-
-                LOG("迭代器遍历（含 begin/end + refCount 保护）：平均 ", iterMean / 1000.0, " us，标准差 ", iterSd / 1000.0, " us（", iterKept, " 个样本通过 IQR）");
-                LOG("get(i) 循环（裸指针快照借用）：平均 ", getMean / 1000.0, " us，标准差 ", getSd / 1000.0, " us（", getKept, " 个样本通过 IQR）");
-                LOG("迭代器 / get 比率 = ", getMean > 0.0 ? iterMean / getMean : 0.0, "x");
-            }
+                ankerl::nanobench::doNotOptimizeAway(accum);
+            });
         }
 
         auto testBenchConcurrentIterators() -> void {
             LOG("--- [性能] 并发迭代器吞吐（1 / 2 / 4 / 8 线程） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr int threadConfigs[] = { 1, 2, 4, 8 };
+            constexpr int threadConfigs[] = { 1, 2, 4, 8 };
 
-                for (int threadCount : threadConfigs) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
+            for (int threadCount : threadConfigs) {
+                auto list = IMPList<int>(1024, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
-                    for (int i = 0; i < 10000; ++i) {
-                        list.add(i);
-                    }
-                    list.tryMerging();
+                for (int i = 0; i < 10000; ++i) {
+                    list.add(i);
+                }
+                list.tryMerging();
 
+                globalBench.batch(10000).run(("[迭代器] " + std::to_string(threadCount) + " 线程并发迭代").c_str(), [&] {
                     std::vector<std::thread> threads;
-                    threads.reserve((usize) threadCount);
-                    std::vector<ConcurrentTaskResult> results((usize) threadCount);
-
                     for (int t = 0; t < threadCount; ++t) {
-                        threads.emplace_back([&list, &results, t]() {
-                            results[(usize) t] = runConcurrentIteratorTask(list, (u64) t, kMeasureNs, kWarmupNs);
+                        threads.emplace_back([&list]() {
+                            int accum = 0;
+                            for (const auto& v : list) {
+                                accum += v;
+                            }
+                            ankerl::nanobench::doNotOptimizeAway(accum);
                         });
                     }
                     for (auto& t : threads) {
                         t.join();
                     }
-
-                    u64 totalOps = 0;
-                    u64 maxElapsedNs = 0;
-                    for (const auto& r : results) {
-                        totalOps += r.ops;
-                        if (r.elapsedNs > maxElapsedNs) {
-                            maxElapsedNs = r.elapsedNs;
-                        }
-                    }
-
-                    const double opsPerSec = maxElapsedNs > 0 ? (double) totalOps / ((double) maxElapsedNs / 1e9) : 0.0;
-                    const double nsPerOp = opsPerSec > 0.0 ? 1e9 / opsPerSec : 0.0;
-
-                    LOG(threadCount, " 线程并发迭代（1 万元素）：", opsPerSec / 1e6, " M iter/s（", nsPerOp, " ns/iter，每 iter 含 1 万元素遍历）");
-                }
+                });
             }
         }
 
         auto testBenchIteratorMerge() -> void {
-            LOG("--- [性能] 迭代器 + merge 混合吞吐（不同规模） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 sizes[] = { 1000, 10000, 100000 };
+            LOG("--- [性能] 迭代器 + merge 混合吞吐 ---");
+            constexpr u32 n = 10000;
+            auto list = IMPList<int>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                for (u32 n : sizes) {
-                    static u64 samples[BENCH_TRIALS];
-                    QpcTimer timer;
-
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 20, 10000);
-
-                        for (u32 i = 0; i < n; ++i) {
-                            list.add((int) i);
-                        }
-                        list.tryMerging();
-
-                        timer.start();
-                        for (u32 round = 0; round < 10; ++round) {
-                            int accum = 0;
-                            for (const auto& v : list) {
-                                accum += v;
-                            }
-                            list.add((int) (n + round));
-                            list.tryMerging();
-                            if (accum == 0xDEADBEEF) {
-                                LOG("impossible");
-                            }
-                        }
-                        samples[t] = timer.stopNs() * 100 / (10 * n);
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-                    logPerOp("迭代 + merge 混合吞吐", samples, BENCH_TRIALS, 100.0);
-                }
+            for (u32 i = 0; i < n; ++i) {
+                list.add((int) i);
             }
+            list.tryMerging();
+
+            globalBench.batch(10).run("[迭代器] 迭代 + merge 混合", [&] {
+                for (u32 round = 0; round < 10; ++round) {
+                    int accum = 0;
+                    for (const auto& v : list) {
+                        accum += v;
+                    }
+                    list.add((int) (n + round));
+                    list.tryMerging();
+                    ankerl::nanobench::doNotOptimizeAway(accum);
+                }
+            });
         }
 
         auto testBenchContains() -> void {
             LOG("--- [性能] contains 扫描延迟（命中/未命中） ---");
-            LOGGER_INDENT_BLOCK(true) {
+            auto list = IMPList<int>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
+
+            for (int i = 0; i < 1000; ++i) {
+                list.add(i);
+            }
+            list.tryMerging();
+
+            globalBench.batch(100).run("[查找] contains (命中)", [&] {
+                int hits = 0;
+                for (int i = 0; i < 100; ++i) {
+                    if (list.contains(i % 1000)) hits++;
+                }
+                ankerl::nanobench::doNotOptimizeAway(hits);
+            });
+
+            globalBench.batch(100).run("[查找] contains (未命中)", [&] {
+                int misses = 0;
+                for (int i = 0; i < 100; ++i) {
+                    if (!list.contains(10000 + i)) misses++;
+                }
+                ankerl::nanobench::doNotOptimizeAway(misses);
+            });
+        }
+
+        auto testBenchContainsUnorderedVsSorted() -> void {
+            LOG("--- [性能] contains 延迟（UNORDERED 线性 vs ASCENDING 二分） ---");
+            constexpr u32 kElements = 1000;
+            auto unorderedList = IMPList<int>(1024, 1024);
+            auto sortedList = IMPList<int>(1024, 1024);
+            unorderedList.configureMaintenanceMerging(false);
+            unorderedList.configureCompaction(false, 20, 10000);
+            sortedList.configureMaintenanceMerging(false);
+            sortedList.configureCompaction(false, 20, 10000);
+
+            for (u32 i = 0; i < kElements; ++i) {
+                unorderedList.add((int) i);
+                sortedList.add((int) i);
+            }
+            unorderedList.tryMerging();
+            sortedList.naturalSort(); // 内部包含 tryMerging + awaitMerging，但这是一次性准备
+
+            globalBench.batch(100).run("[查找] contains 命中 (线性)", [&] {
+                int hits = 0;
+                for (u32 i = 0; i < 100; ++i) if (unorderedList.contains(i)) hits++;
+                ankerl::nanobench::doNotOptimizeAway(hits);
+            });
+            globalBench.batch(100).run("[查找] contains 命中 (二分)", [&] {
+                int hits = 0;
+                for (u32 i = 0; i < 100; ++i) if (sortedList.contains(i)) hits++;
+                ankerl::nanobench::doNotOptimizeAway(hits);
+            });
+            globalBench.batch(100).run("[查找] contains 未命中 (线性)", [&] {
+                int misses = 0;
+                for (u32 i = 0; i < 100; ++i) if (!unorderedList.contains(10000 + i)) misses++;
+                ankerl::nanobench::doNotOptimizeAway(misses);
+            });
+            globalBench.batch(100).run("[查找] contains 未命中 (二分)", [&] {
+                int misses = 0;
+                for (u32 i = 0; i < 100; ++i) if (!sortedList.contains(10000 + i)) misses++;
+                ankerl::nanobench::doNotOptimizeAway(misses);
+            });
+        }
+
+        auto testBenchContainsAllUnorderedVsSorted() -> void {
+            LOG("--- [性能] containsAll 延迟（UNORDERED 线性 vs ASCENDING 二分） ---");
+            constexpr u32 kElements = 1000;
+            auto unorderedList = IMPList<int>(1024, 1024);
+            auto sortedList = IMPList<int>(1024, 1024);
+            unorderedList.configureMaintenanceMerging(false);
+            unorderedList.configureCompaction(false, 20, 10000);
+            sortedList.configureMaintenanceMerging(false);
+            sortedList.configureCompaction(false, 20, 10000);
+
+            for (u32 i = 0; i < kElements; ++i) {
+                unorderedList.add((int) i);
+                sortedList.add((int) i);
+            }
+            unorderedList.tryMerging();
+            sortedList.naturalSort();
+
+            constexpr int hitTargets[] = { 100, 500, 900 };
+            constexpr int missTargets[] = { 100, 500, 10000 };
+
+            globalBench.batch(100).run("[查找] containsAll 命中 (线性)", [&] {
+                int hits = 0;
+                for (u32 i = 0; i < 100; ++i) if (unorderedList.containsAll(hitTargets, 3)) hits++;
+                ankerl::nanobench::doNotOptimizeAway(hits);
+            });
+            globalBench.batch(100).run("[查找] containsAll 命中 (二分)", [&] {
+                int hits = 0;
+                for (u32 i = 0; i < 100; ++i) if (sortedList.containsAll(hitTargets, 3)) hits++;
+                ankerl::nanobench::doNotOptimizeAway(hits);
+            });
+            globalBench.batch(100).run("[查找] containsAll 未命中 (线性)", [&] {
+                int misses = 0;
+                for (u32 i = 0; i < 100; ++i) if (!unorderedList.containsAll(missTargets, 3)) misses++;
+                ankerl::nanobench::doNotOptimizeAway(misses);
+            });
+            globalBench.batch(100).run("[查找] containsAll 未命中 (二分)", [&] {
+                int misses = 0;
+                for (u32 i = 0; i < 100; ++i) if (!sortedList.containsAll(missTargets, 3)) misses++;
+                ankerl::nanobench::doNotOptimizeAway(misses);
+            });
+        }
+
+        auto testBenchFirstLastIndexOf() -> void {
+            LOG("--- [性能] firstIndexOf / lastIndexOf 延迟 ---");
+            constexpr u32 kDistinctValues = 200;
+            constexpr u32 kRepeatPerValue = 5;
+            constexpr u32 kElements = kDistinctValues * kRepeatPerValue;
+
+            auto unorderedList = IMPList<int>(1024, 1024);
+            auto sortedList = IMPList<int>(1024, 1024);
+            unorderedList.configureMaintenanceMerging(false);
+            unorderedList.configureCompaction(false, 20, 10000);
+            sortedList.configureMaintenanceMerging(false);
+            sortedList.configureCompaction(false, 20, 10000);
+
+            for (u32 i = 0; i < kElements; ++i) {
+                const int v = (int) (i / kRepeatPerValue);
+                unorderedList.add(v);
+                sortedList.add(v);
+            }
+            unorderedList.tryMerging();
+            sortedList.naturalSort();
+
+            globalBench.batch(100).run("[查找] firstIndexOf (线性)", [&] {
+                ssize sum = 0;
+                for (u32 i = 0; i < 100; ++i) sum += unorderedList.firstIndexOf(i % kDistinctValues);
+                ankerl::nanobench::doNotOptimizeAway(sum);
+            });
+            globalBench.batch(100).run("[查找] firstIndexOf (二分)", [&] {
+                ssize sum = 0;
+                for (u32 i = 0; i < 100; ++i) sum += sortedList.firstIndexOf(i % kDistinctValues);
+                ankerl::nanobench::doNotOptimizeAway(sum);
+            });
+            globalBench.batch(100).run("[查找] lastIndexOf (线性)", [&] {
+                ssize sum = 0;
+                for (u32 i = 0; i < 100; ++i) sum += unorderedList.lastIndexOf(i % kDistinctValues);
+                ankerl::nanobench::doNotOptimizeAway(sum);
+            });
+            globalBench.batch(100).run("[查找] lastIndexOf (二分)", [&] {
+                ssize sum = 0;
+                for (u32 i = 0; i < 100; ++i) sum += sortedList.lastIndexOf(i % kDistinctValues);
+                ankerl::nanobench::doNotOptimizeAway(sum);
+            });
+        }
+
+        auto testBenchConcurrentAdd() -> void {
+            LOG("--- [性能] 4 线程并发 add 吞吐 ---");
+            constexpr int kThreadCount = 4;
+            constexpr u32 n = 100000;
+            const u32 perThread = n / kThreadCount;
+
+            globalBench.batch(n).run("[并发] 4 线程并发 add+merge", [&] {
                 auto list = IMPList<int>(1024, 1024);
                 list.configureMaintenanceMerging(false);
                 list.configureCompaction(false, 20, 10000);
 
-                for (int i = 0; i < 1000; ++i) {
-                    list.add(i);
+                std::vector<std::thread> threads;
+                for (int th = 0; th < kThreadCount; ++th) {
+                    threads.emplace_back([&list, th, perThread]() {
+                        for (u32 i = 0; i < perThread; ++i) {
+                            list.add((int) (th * perThread + i));
+                        }
+                    });
+                }
+                for (auto& thread : threads) {
+                    thread.join();
                 }
                 list.tryMerging();
-
-                static u64 hitSamples[BENCH_TRIALS];
-                static u64 missSamples[BENCH_TRIALS];
-                constexpr u32 kIters = 100000;
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    u32 hits = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (list.contains((int) (i % 1000))) {
-                            hits++;
-                        }
-                    }
-                    hitSamples[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 misses = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (!list.contains((int) (10000 + i))) {
-                            misses++;
-                        }
-                    }
-                    missSamples[t] = timer.stopNs() * 100 / kIters;
-
-                    if (hits + misses == 0xDEADBEEF) {
-                        LOG("impossible");
-                    }
-                }
-
-                sortU64(hitSamples, BENCH_TRIALS);
-                sortU64(missSamples, BENCH_TRIALS);
-
-                logPerOp("contains（命中）", hitSamples, BENCH_TRIALS, 100.0);
-                logPerOp("contains（未命中）", missSamples, BENCH_TRIALS, 100.0);
-            }
-        }
-
-        auto testBenchContainsUnorderedVsSorted() -> void {
-            LOG("--- [性能] contains 延迟（UNORDERED 线性 vs ASCENDING 二分，1000 元素） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kElements = 1000;
-                constexpr u32 kIters = 100000;
-
-                auto unorderedList = IMPList<int>(1024, 1024);
-                auto sortedList = IMPList<int>(1024, 1024);
-                unorderedList.configureMaintenanceMerging(false);
-                unorderedList.configureCompaction(false, 20, 10000);
-                sortedList.configureMaintenanceMerging(false);
-                sortedList.configureCompaction(false, 20, 10000);
-
-                for (u32 i = 0; i < kElements; ++i) {
-                    unorderedList.add((int) i);
-                    sortedList.add((int) i);
-                }
-                unorderedList.tryMerging();
-                sortedList.naturalSort();
-
-                static u64 hitUnordered[BENCH_TRIALS];
-                static u64 hitSorted[BENCH_TRIALS];
-                static u64 missUnordered[BENCH_TRIALS];
-                static u64 missSorted[BENCH_TRIALS];
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    u32 hitsU = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (unorderedList.contains((int) (i % kElements))) {
-                            hitsU++;
-                        }
-                    }
-                    hitUnordered[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 hitsS = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (sortedList.contains((int) (i % kElements))) {
-                            hitsS++;
-                        }
-                    }
-                    hitSorted[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 missesU = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (!unorderedList.contains((int) (10000 + i))) {
-                            missesU++;
-                        }
-                    }
-                    missUnordered[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 missesS = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (!sortedList.contains((int) (10000 + i))) {
-                            missesS++;
-                        }
-                    }
-                    missSorted[t] = timer.stopNs() * 100 / kIters;
-
-                    if (hitsU + hitsS + missesU + missesS == 0xDEADBEEF) {
-                        LOG("impossible");
-                    }
-                }
-
-                sortU64(hitUnordered, BENCH_TRIALS);
-                sortU64(hitSorted, BENCH_TRIALS);
-                sortU64(missUnordered, BENCH_TRIALS);
-                sortU64(missSorted, BENCH_TRIALS);
-
-                const double mHU = meanIqr(hitUnordered, BENCH_TRIALS) / 100.0;
-                const double mHS = meanIqr(hitSorted, BENCH_TRIALS) / 100.0;
-                const double mMU = meanIqr(missUnordered, BENCH_TRIALS) / 100.0;
-                const double mMS = meanIqr(missSorted, BENCH_TRIALS) / 100.0;
-
-                logPerOp("contains 命中（UNORDERED 线性）", hitUnordered, BENCH_TRIALS, 100.0);
-                logPerOp("contains 命中（ASCENDING 二分）", hitSorted, BENCH_TRIALS, 100.0);
-                logPerOp("contains 未命中（UNORDERED 线性）", missUnordered, BENCH_TRIALS, 100.0);
-                logPerOp("contains 未命中（ASCENDING 二分）", missSorted, BENCH_TRIALS, 100.0);
-
-                LOG("加速比（命中）= ", mHS > 0.0 ? mHU / mHS : 0.0, "x，加速比（未命中）= ", mMS > 0.0 ? mMU / mMS : 0.0, "x");
-            }
-        }
-
-        auto testBenchContainsAllUnorderedVsSorted() -> void {
-            LOG("--- [性能] containsAll 延迟（UNORDERED 线性 vs ASCENDING 二分，1000 元素 × 3 targets） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kElements = 1000;
-                constexpr u32 kIters = 10000;
-
-                auto unorderedList = IMPList<int>(1024, 1024);
-                auto sortedList = IMPList<int>(1024, 1024);
-                unorderedList.configureMaintenanceMerging(false);
-                unorderedList.configureCompaction(false, 20, 10000);
-                sortedList.configureMaintenanceMerging(false);
-                sortedList.configureCompaction(false, 20, 10000);
-
-                for (u32 i = 0; i < kElements; ++i) {
-                    unorderedList.add((int) i);
-                    sortedList.add((int) i);
-                }
-                unorderedList.tryMerging();
-                sortedList.naturalSort();
-
-                constexpr int hitTargets[] = { 100, 500, 900 };
-                constexpr int missTargets[] = { 100, 500, 10000 };
-
-                static u64 hitUnordered[BENCH_TRIALS];
-                static u64 hitSorted[BENCH_TRIALS];
-                static u64 missUnordered[BENCH_TRIALS];
-                static u64 missSorted[BENCH_TRIALS];
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    u32 hitsU = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (unorderedList.containsAll(hitTargets, 3)) {
-                            hitsU++;
-                        }
-                    }
-                    hitUnordered[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 hitsS = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (sortedList.containsAll(hitTargets, 3)) {
-                            hitsS++;
-                        }
-                    }
-                    hitSorted[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 missesU = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (!unorderedList.containsAll(missTargets, 3)) {
-                            missesU++;
-                        }
-                    }
-                    missUnordered[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    u32 missesS = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        if (!sortedList.containsAll(missTargets, 3)) {
-                            missesS++;
-                        }
-                    }
-                    missSorted[t] = timer.stopNs() * 100 / kIters;
-
-                    if (hitsU + hitsS + missesU + missesS == 0xDEADBEEF) {
-                        LOG("impossible");
-                    }
-                }
-
-                sortU64(hitUnordered, BENCH_TRIALS);
-                sortU64(hitSorted, BENCH_TRIALS);
-                sortU64(missUnordered, BENCH_TRIALS);
-                sortU64(missSorted, BENCH_TRIALS);
-
-                const double mHU = meanIqr(hitUnordered, BENCH_TRIALS) / 100.0;
-                const double mHS = meanIqr(hitSorted, BENCH_TRIALS) / 100.0;
-                const double mMU = meanIqr(missUnordered, BENCH_TRIALS) / 100.0;
-                const double mMS = meanIqr(missSorted, BENCH_TRIALS) / 100.0;
-
-                logPerOp("containsAll 命中（UNORDERED 线性）", hitUnordered, BENCH_TRIALS, 100.0);
-                logPerOp("containsAll 命中（ASCENDING 二分）", hitSorted, BENCH_TRIALS, 100.0);
-                logPerOp("containsAll 未命中（UNORDERED 线性）", missUnordered, BENCH_TRIALS, 100.0);
-                logPerOp("containsAll 未命中（ASCENDING 二分）", missSorted, BENCH_TRIALS, 100.0);
-
-                LOG("加速比（命中）= ", mHS > 0.0 ? mHU / mHS : 0.0, "x，加速比（未命中）= ", mMS > 0.0 ? mMU / mMS : 0.0, "x");
-            }
-        }
-
-        auto testBenchFirstLastIndexOf() -> void {
-            LOG("--- [性能] firstIndexOf / lastIndexOf 延迟（重复元素，UNORDERED 线性 vs ASCENDING 二分） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kDistinctValues = 200;
-                constexpr u32 kRepeatPerValue = 5;
-                constexpr u32 kElements = kDistinctValues * kRepeatPerValue;
-                constexpr u32 kIters = 20000;
-
-                auto unorderedList = IMPList<int>(1024, 1024);
-                auto sortedList = IMPList<int>(1024, 1024);
-                unorderedList.configureMaintenanceMerging(false);
-                unorderedList.configureCompaction(false, 20, 10000);
-                sortedList.configureMaintenanceMerging(false);
-                sortedList.configureCompaction(false, 20, 10000);
-
-                for (u32 i = 0; i < kElements; ++i) {
-                    const int v = (int) (i / kRepeatPerValue);
-                    unorderedList.add(v);
-                    sortedList.add(v);
-                }
-                unorderedList.tryMerging();
-                sortedList.naturalSort();
-
-                static u64 firstUnordered[BENCH_TRIALS];
-                static u64 firstSorted[BENCH_TRIALS];
-                static u64 lastUnordered[BENCH_TRIALS];
-                static u64 lastSorted[BENCH_TRIALS];
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    timer.start();
-                    ssize firstSumU = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        firstSumU += unorderedList.firstIndexOf((int) (i % kDistinctValues));
-                    }
-                    firstUnordered[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    ssize firstSumS = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        firstSumS += sortedList.firstIndexOf((int) (i % kDistinctValues));
-                    }
-                    firstSorted[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    ssize lastSumU = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        lastSumU += unorderedList.lastIndexOf((int) (i % kDistinctValues));
-                    }
-                    lastUnordered[t] = timer.stopNs() * 100 / kIters;
-
-                    timer.start();
-                    ssize lastSumS = 0;
-                    for (u32 i = 0; i < kIters; ++i) {
-                        lastSumS += sortedList.lastIndexOf((int) (i % kDistinctValues));
-                    }
-                    lastSorted[t] = timer.stopNs() * 100 / kIters;
-
-                    if (firstSumU + firstSumS + lastSumU + lastSumS == 0xDEADBEEF) {
-                        LOG("impossible");
-                    }
-                }
-
-                sortU64(firstUnordered, BENCH_TRIALS);
-                sortU64(firstSorted, BENCH_TRIALS);
-                sortU64(lastUnordered, BENCH_TRIALS);
-                sortU64(lastSorted, BENCH_TRIALS);
-
-                const double mFU = meanIqr(firstUnordered, BENCH_TRIALS) / 100.0;
-                const double mFS = meanIqr(firstSorted, BENCH_TRIALS) / 100.0;
-                const double mLU = meanIqr(lastUnordered, BENCH_TRIALS) / 100.0;
-                const double mLS = meanIqr(lastSorted, BENCH_TRIALS) / 100.0;
-
-                logPerOp("firstIndexOf（UNORDERED 线性）", firstUnordered, BENCH_TRIALS, 100.0);
-                logPerOp("firstIndexOf（ASCENDING 二分）", firstSorted, BENCH_TRIALS, 100.0);
-                logPerOp("lastIndexOf（UNORDERED 线性）", lastUnordered, BENCH_TRIALS, 100.0);
-                logPerOp("lastIndexOf（ASCENDING 二分）", lastSorted, BENCH_TRIALS, 100.0);
-
-                LOG("加速比（firstIndexOf）= ", mFS > 0.0 ? mFU / mFS : 0.0, "x，加速比（lastIndexOf）= ", mLS > 0.0 ? mLU / mLS : 0.0, "x");
-            }
-        }
-
-        auto testBenchConcurrentAdd() -> void {
-            LOG("--- [性能] 4 线程并发 add 吞吐（不同规模，检验可扩展性） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 sizes[] = { 10000, 100000, 1000000 };
-
-                for (u32 total : sizes) {
-                    static u64 samples[BENCH_TRIALS];
-                    constexpr int kThreadCount = 4;
-                    const u32 perThread = total / kThreadCount;
-                    QpcTimer timer;
-
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 20, 10000);
-
-                        std::vector<std::thread> threads;
-                        timer.start();
-                        for (int th = 0; th < kThreadCount; ++th) {
-                            threads.emplace_back([&list, th, perThread]() {
-                                for (u32 i = 0; i < perThread; ++i) {
-                                    list.add((int) (th * perThread + i));
-                                }
-                            });
-                        }
-                        for (auto& thread : threads) {
-                            thread.join();
-                        }
-                        list.tryMerging();
-                        samples[t] = timer.stopNs() * 100 / total;
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-                    logPerOp("4 线程并发 add+merge", samples, BENCH_TRIALS, 100.0);
-                }
-            }
+                ankerl::nanobench::doNotOptimizeAway(list);
+            });
         }
 
         auto testBenchHighConcurrencyReadWrite() -> void {
-            LOG("--- [性能] 高并发读写吞吐（分线程数与读写比例，维护线程自动合并，真实并发场景） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr int threadConfigs[] = {
-                    1, 2, 4, 8
-                };
-                struct ReadWriteRatio {
-                    int readers;
-                    int writers;
-                };
-                const ReadWriteRatio ratios[] = {
-                    { 1, 1 },
-                    { 1, 4 },
-                    { 4, 1 },
-                    { 1, 0 },
-                    { 0, 1 }
-                };
+            LOG("--- [性能] 高并发读写吞吐（分线程数与读写比例，大基数压测） ---");
+            constexpr int threadConfigs[] = { 1, 2, 4, 8 };
+            struct ReadWriteRatio { int readers; int writers; };
+            const ReadWriteRatio ratios[] = { { 1, 1 }, { 1, 4 }, { 4, 1 }, { 1, 0 }, { 0, 1 } };
 
-                for (int baseThreads : threadConfigs) {
-                    for (const auto& ratio : ratios) {
-                        int rThreads = ratio.readers * baseThreads;
-                        int wThreads = ratio.writers * baseThreads;
-                        int totalThreads = rThreads + wThreads;
+            // 【关键修改】将操作数放大到 100 万次，彻底摊薄线程创建和同步的固定开销
+            constexpr u32 opsPerThread = 1000000;
+            constexpr u32 kReadBatchSize = 1000;
 
-                        if (totalThreads == 0) {
-                            continue;
-                        }
+            for (int baseThreads : threadConfigs) {
+                for (const auto& ratio : ratios) {
+                    int rThreads = ratio.readers * baseThreads;
+                    int wThreads = ratio.writers * baseThreads;
+                    int totalThreads = rThreads + wThreads;
+                    if (totalThreads == 0) continue;
 
-                        auto list = IMPList<int>(1024, 1024);
-                        list.configureCompaction(false, 20, 10000);
-                        for (int i = 0; i < 10000; ++i) {
-                            list.add(i);
-                        }
-                        list.tryMerging();
-                        list.awaitMerging();
+                    auto list = IMPList<int>(1024, 1024);
+                    list.configureCompaction(false, 20, 10000);
+                    for (int i = 0; i < 10000; ++i) list.add(i);
+                    list.tryMerging();
+                    list.awaitMerging();
 
+                    // 计算当前配置下的真实总操作数
+                    u64 totalOps = (u64) rThreads * opsPerThread * kReadBatchSize + (u64) wThreads * opsPerThread;
+
+                    std::string benchName = "[并发] " + std::to_string(totalThreads) + " 线程 (" + std::to_string(rThreads) + " 读 " + std::to_string(wThreads) + " 写)";
+                    globalBench.batch(totalOps).run(benchName.c_str(), [&] {
                         std::vector<std::thread> threads;
                         threads.reserve(totalThreads);
-                        std::vector<ConcurrentTaskResult> results(totalThreads);
 
+                        // 读线程：每次获取快照后，连续遍历 1000 个元素
                         for (int r = 0; r < rThreads; ++r) {
-                            threads.emplace_back([&list, &results, r]() {
-                                results[r] = runConcurrentTask(list, true, r, kMeasureNs, kWarmupNs);
+                            threads.emplace_back([&list, opsPerThread, kReadBatchSize] {
+                                int accum = 0;
+                                for (u32 i = 0; i < opsPerThread; ++i) {
+                                    usize idx = 0;
+                                    for (const auto& v : list) {
+                                        accum += v;
+                                        if (++idx >= kReadBatchSize) break;
+                                    }
+                                }
+                                ankerl::nanobench::doNotOptimizeAway(accum);
                             });
                         }
 
+                        // 写线程：疯狂追加
                         for (int w = 0; w < wThreads; ++w) {
-                            threads.emplace_back([&list, &results, rThreads, w]() {
-                                results[rThreads + w] = runConcurrentTask(list, false, w, kMeasureNs, kWarmupNs);
+                            threads.emplace_back([&list, w, opsPerThread]() {
+                                for (u32 i = 0; i < opsPerThread; ++i) {
+                                    list.add((int) (w * opsPerThread + i));
+                                }
                             });
                         }
 
                         for (auto& t : threads) {
                             t.join();
                         }
-
-                        u64 totalR = 0;
-                        u64 totalRElapsedNs = 0;
-                        u64 totalW = 0;
-                        u64 totalWElapsedNs = 0;
-
-                        for (int r = 0; r < rThreads; ++r) {
-                            totalR += results[r].ops;
-                            if (results[r].elapsedNs > totalRElapsedNs) {
-                                totalRElapsedNs = results[r].elapsedNs;
-                            }
-                        }
-                        for (int w = 0; w < wThreads; ++w) {
-                            totalW += results[rThreads + w].ops;
-                            if (results[rThreads + w].elapsedNs > totalWElapsedNs) {
-                                totalWElapsedNs = results[rThreads + w].elapsedNs;
-                            }
-                        }
-
-                        logConcurrentMetrics(totalThreads, rThreads, wThreads, totalR, totalRElapsedNs, totalW, totalWElapsedNs);
-                    }
+                        list.tryMerging();
+                        list.awaitMerging();
+                    });
                 }
             }
         }
 
         auto testBenchMergeCostByChunkSize() -> void {
-            LOG("--- [性能] merge 单独成本（不同 chunkSize，带 Span 复用，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
+            LOG("--- [性能] merge 单独成本（不同 chunkSize） ---");
+            const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
+            constexpr u32 kElements = 200000;
 
-                for (usize cs : chunkSizes) {
-                    static u64 samples[BENCH_TRIALS];
-                    constexpr u32 kElements = 200000;
-                    QpcTimer timer;
+            for (usize cs : chunkSizes) {
+                auto list = IMPList<int>(cs, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(cs, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 20, 10000);
-
-                        for (u32 i = 0; i < kElements; ++i) {
-                            list.add((int) i);
-                        }
-
-                        list.tryMerging();
-                        list.add(0);
-
-                        timer.start();
-                        list.tryMerging();
-                        samples[t] = timer.stopNs();
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-
-                    double mean = 0.0;
-                    double sd = 0.0;
-                    u32 kept = 0;
-                    computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                    LOG("chunkSize = ", cs, "，merge 单独耗时 = 平均 ", mean / 1e6, " ms，标准差 ", sd / 1e6, " ms，最小 ", samples[0] / 1e6, " ms，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1e6, " ms，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1e6, " ms，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1e6, " ms，最大 ", samples[BENCH_TRIALS - 1] / 1e6, " ms（", kept, " 个样本通过 IQR）");
+                for (u32 i = 0; i < kElements; ++i) {
+                    list.add((int) i);
                 }
+                list.tryMerging(); // 初始化预热
+                list.add(0); // 制造脏数据
+
+                std::string benchName = "[Merge] chunkSize = " + std::to_string(cs);
+                globalBench.batch(kElements).run(benchName.c_str(), [&] {
+                    list.tryMerging(); // 单线程同步执行，无需 await
+                });
             }
         }
 
         auto testBenchDiscardHashPath() -> void {
-            LOG("--- [性能] discard 转化 tombstones 延迟（elementSize = 4，FNV Hash 路径，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kElements = 100000;
-                constexpr u32 kDiscards = 10000;
-                static u64 samples[BENCH_TRIALS];
-                QpcTimer timer;
+            LOG("--- [性能] discard 转化 tombstones 延迟（int Hash 路径） ---");
+            constexpr u32 kElements = 100000;
+            constexpr u32 kDiscards = 10000;
 
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
+            auto list = IMPList<int>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                    for (u32 i = 0; i < kElements; ++i) {
-                        list.add((int) i);
-                    }
-
-                    list.tryMerging();
-
-                    for (u32 i = 0; i < kDiscards; ++i) {
-                        list.discard((int) i);
-                    }
-
-                    timer.start();
-                    list.tryMerging();
-                    samples[t] = timer.stopNs();
-                }
-
-                sortU64(samples, BENCH_TRIALS);
-
-                double mean = 0.0;
-                double sd = 0.0;
-                u32 kept = 0;
-                computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                LOG("10万添加 + 1万删除 → 增量 merge 耗时 = 平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us（", kept, " 个样本通过 IQR）");
+            for (u32 i = 0; i < kElements; ++i) {
+                list.add((int) i);
             }
+            list.tryMerging();
+
+            for (u32 i = 0; i < kDiscards; ++i) {
+                list.discard((int) i);
+            }
+
+            globalBench.batch(kDiscards).run("[Merge] 10万添加 + 1万删除 → merge", [&] {
+                list.tryMerging();
+            });
         }
 
         auto testBenchDiscardHashPathLargeElement() -> void {
-            LOG("--- [性能] discard 转化 tombstones 延迟（elementSize = 12，FNV Hash 路径，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                struct CustomStruct {
-                    int a;
-                    int b;
-                    int c;
-                };
+            LOG("--- [性能] discard 转化 tombstones 延迟（自定义 Struct Hash 路径） ---");
+            struct CustomStruct { int a; int b; int c; };
+            constexpr u32 kElements = 50000;
+            constexpr u32 kDiscards = 5000;
 
-                constexpr u32 kElements = 50000;
-                constexpr u32 kDiscards = 5000;
-                static u64 samples[BENCH_TRIALS];
-                QpcTimer timer;
+            auto list = IMPList<CustomStruct>(1024, 1024);
+            list.configureMaintenanceMerging(false);
+            list.configureCompaction(false, 20, 10000);
 
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<CustomStruct>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
-
-                    for (u32 i = 0; i < kElements; ++i) {
-                        list.add({ (int) i, (int) i, (int) i });
-                    }
-
-                    list.tryMerging();
-
-                    for (u32 i = 0; i < kDiscards; ++i) {
-                        list.discard({ (int) i, (int) i, (int) i });
-                    }
-
-                    timer.start();
-                    list.tryMerging();
-                    samples[t] = timer.stopNs();
-                }
-
-                sortU64(samples, BENCH_TRIALS);
-
-                double mean = 0.0;
-                double sd = 0.0;
-                u32 kept = 0;
-                computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                LOG("5万添加 + 5千删除 → 增量 merge 耗时 = 平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us（", kept, " 个样本通过 IQR）");
+            for (u32 i = 0; i < kElements; ++i) {
+                list.add({ (int) i, (int) i, (int) i });
             }
+            list.tryMerging();
+
+            for (u32 i = 0; i < kDiscards; ++i) {
+                list.discard({ (int) i, (int) i, (int) i });
+            }
+
+            globalBench.batch(kDiscards).run("[Merge] 5万添加 + 5千删除 → merge", [&] {
+                list.tryMerging();
+            });
         }
 
         auto testBenchCompactByRatio() -> void {
-            LOG("--- [性能] compact 单次成本（不同墓碑比例，elementSize = 4，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kElements = 10000;
-                constexpr u32 kTrials = 11;
-                constexpr u32 discardRatios[] = { 20, 50, 80 };
+            LOG("--- [性能] compact 单次成本（不同墓碑比例） ---");
+            constexpr u32 kElements = 10000;
+            constexpr u32 discardRatios[] = { 20, 50, 80 };
 
-                for (u32 ratio : discardRatios) {
-                    static u64 samples[kTrials];
-                    QpcTimer timer;
+            for (u32 ratio : discardRatios) {
+                auto list = IMPList<int>(1024, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 0, 1000000);
 
-                    const u32 discards = kElements * ratio / 100;
-
-                    for (u32 t = 0; t < kTrials; ++t) {
-                        auto list = IMPList<int>(1024, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 0, 1000000);
-
-                        for (u32 i = 0; i < kElements; ++i) {
-                            list.add((int) i);
-                        }
-                        list.tryMerging();
-                        list.awaitMerging();
-
-                        for (u32 i = 0; i < discards; ++i) {
-                            list.remove((int) i);
-                        }
-                        list.tryMerging();
-                        list.awaitMerging();
-
-                        timer.start();
-                        list.tryCompacting();
-                        samples[t] = timer.stopNs();
-                    }
-
-                    sortU64(samples, kTrials);
-
-                    double mean = 0.0;
-                    double sd = 0.0;
-                    u32 kept = 0;
-                    computeMeanSdIqr(samples, kTrials, &mean, &sd, &kept);
-
-                    LOG("墓碑占比 ", ratio, "%：compact 耗时 = 平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us，最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, kTrials, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, kTrials, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, kTrials, 0.99) / 1000.0, " us，最大 ", samples[kTrials - 1] / 1000.0, " us（", kept, " 个样本通过 IQR）");
+                for (u32 i = 0; i < kElements; ++i) {
+                    list.add((int) i);
                 }
+                list.tryMerging();
+
+                for (u32 i = 0; i < kElements * ratio / 100; ++i) {
+                    list.remove((int) i);
+                }
+                list.tryMerging();
+
+                std::string benchName = "[Compact] 墓碑占比 " + std::to_string(ratio) + "%";
+                globalBench.batch(kElements).run(benchName.c_str(), [&] {
+                    list.tryCompacting();
+                });
             }
         }
 
         auto testBenchCompactByChunkSize() -> void {
-            LOG("--- [性能] compact 单独成本（不同 chunkSize，墓碑占比 50%，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
-                constexpr u32 kElements = 10000;
-                constexpr u32 kDiscards = 5000;
-                constexpr u32 kTrials = 11;
+            LOG("--- [性能] compact 单独成本（不同 chunkSize） ---");
+            const usize chunkSizes[] = { 16, 64, 256, 1024, 4096 };
+            constexpr u32 kElements = 10000;
+            constexpr u32 kDiscards = 5000;
 
-                for (usize cs : chunkSizes) {
-                    static u64 samples[kTrials];
-                    QpcTimer timer;
+            for (usize cs : chunkSizes) {
+                auto list = IMPList<int>(cs, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 0, 1000000);
 
-                    for (u32 t = 0; t < kTrials; ++t) {
-                        auto list = IMPList<int>(cs, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 0, 1000000);
-
-                        for (u32 i = 0; i < kElements; ++i) {
-                            list.add((int) i);
-                        }
-                        list.tryMerging();
-                        list.awaitMerging();
-
-                        for (u32 i = 0; i < kDiscards; ++i) {
-                            list.remove((int) i);
-                        }
-                        list.tryMerging();
-                        list.awaitMerging();
-
-                        timer.start();
-                        list.tryCompacting();
-                        samples[t] = timer.stopNs();
-                    }
-
-                    sortU64(samples, kTrials);
-
-                    double mean = 0.0;
-                    double sd = 0.0;
-                    u32 kept = 0;
-                    computeMeanSdIqr(samples, kTrials, &mean, &sd, &kept);
-
-                    LOG("chunkSize = ", cs, "，compact 耗时 = 平均 ", mean / 1e6, " ms，标准差 ", sd / 1e6, " ms，最小 ", samples[0] / 1e6, " ms，P50 ", computePercentile(samples, kTrials, 0.50) / 1e6, " ms，P90 ", computePercentile(samples, kTrials, 0.90) / 1e6, " ms，P99 ", computePercentile(samples, kTrials, 0.99) / 1e6, " ms，最大 ", samples[kTrials - 1] / 1e6, " ms（", kept, " 个样本通过 IQR）");
+                for (u32 i = 0; i < kElements; ++i) {
+                    list.add((int) i);
                 }
+                list.tryMerging();
+
+                for (u32 i = 0; i < kDiscards; ++i) {
+                    list.remove((int) i);
+                }
+                list.tryMerging();
+
+                std::string benchName = "[Compact] chunkSize = " + std::to_string(cs);
+                globalBench.batch(kElements).run(benchName.c_str(), [&] {
+                    list.tryCompacting();
+                });
             }
         }
 
         auto testBenchCompactBeforeAfterMerge() -> void {
-            LOG("--- [性能] compact 前后 merge 成本对比（验证墓碑清理收益） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kElements = 10000;
-                constexpr u32 kDiscards = 5000;
-                constexpr u32 kTrials = 11;
-                static u64 beforeSamples[kTrials];
-                static u64 afterSamples[kTrials];
-                QpcTimer timer;
+            LOG("--- [性能] compact 前后 merge 成本对比 ---");
+            constexpr u32 kElements = 10000;
+            constexpr u32 kDiscards = 5000;
 
-                for (u32 t = 0; t < kTrials; ++t) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 0, 1000000);
+            // 准备 Before 场景
+            auto listBefore = IMPList<int>(1024, 1024);
+            listBefore.configureMaintenanceMerging(false);
+            listBefore.configureCompaction(false, 0, 1000000);
+            for (u32 i = 0; i < kElements; ++i) listBefore.add((int) i);
+            listBefore.tryMerging();
+            for (u32 i = 0; i < kDiscards; ++i) listBefore.remove((int) i);
+            listBefore.tryMerging();
 
-                    for (u32 i = 0; i < kElements; ++i) {
-                        list.add((int) i);
-                    }
-                    list.tryMerging();
-                    list.awaitMerging();
+            listBefore.add(999999);
+            globalBench.batch(kElements).run("[Compact] compact 前 merge (含 50% 墓碑)", [&] {
+                listBefore.tryMerging();
+            });
 
-                    for (u32 i = 0; i < kDiscards; ++i) {
-                        list.remove((int) i);
-                    }
-                    list.tryMerging();
-                    list.awaitMerging();
+            // 准备 After 场景
+            auto listAfter = IMPList<int>(1024, 1024);
+            listAfter.configureMaintenanceMerging(false);
+            listAfter.configureCompaction(false, 0, 1000000);
+            for (u32 i = 0; i < kElements; ++i) listAfter.add((int) i);
+            listAfter.tryMerging();
+            for (u32 i = 0; i < kDiscards; ++i) listAfter.remove((int) i);
+            listAfter.tryMerging();
+            listAfter.tryCompacting();
 
-                    list.add(999999);
-
-                    timer.start();
-                    list.tryMerging();
-                    beforeSamples[t] = timer.stopNs();
-
-                    list.tryCompacting();
-                    list.tryMerging();
-                    list.awaitMerging();
-
-                    list.add(999998);
-
-                    timer.start();
-                    list.tryMerging();
-                    afterSamples[t] = timer.stopNs();
-                }
-
-                sortU64(beforeSamples, kTrials);
-                sortU64(afterSamples, kTrials);
-
-                double beforeMean = 0.0;
-                double beforeSd = 0.0;
-                u32 beforeKept = 0;
-                computeMeanSdIqr(beforeSamples, kTrials, &beforeMean, &beforeSd, &beforeKept);
-
-                double afterMean = 0.0;
-                double afterSd = 0.0;
-                u32 afterKept = 0;
-                computeMeanSdIqr(afterSamples, kTrials, &afterMean, &afterSd, &afterKept);
-
-                LOG("compact 前 merge（含 50% 墓碑）：平均 ", beforeMean / 1000.0, " us，标准差 ", beforeSd / 1000.0, " us，P50 ", computePercentile(beforeSamples, kTrials, 0.50) / 1000.0, " us（", beforeKept, " 个样本通过 IQR）");
-                LOG("compact 后 merge（墓碑清理）：平均 ", afterMean / 1000.0, " us，标准差 ", afterSd / 1000.0, " us，P50 ", computePercentile(afterSamples, kTrials, 0.50) / 1000.0, " us（", afterKept, " 个样本通过 IQR）");
-                LOG("merge 加速比 = ", afterMean > 0.0 ? beforeMean / afterMean : 0.0, "x");
-            }
+            listAfter.add(999998);
+            globalBench.batch(kElements).run("[Compact] compact 后 merge (墓碑清理)", [&] {
+                listAfter.tryMerging();
+            });
         }
 
         auto testBenchMoveCost() -> void {
-            LOG("--- [性能] move 常数时间（不同规模，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 sizes[] = { 100, 10000, 1000000 };
-                constexpr u32 kMoveIters = 100000;
+            LOG("--- [性能] move 常数时间 ---");
+            constexpr u32 sizes[] = { 100, 10000, 1000000 };
 
-                for (u32 n : sizes) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
+            for (u32 n : sizes) {
+                auto list = IMPList<int>(1024, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
-                    for (u32 i = 0; i < n; ++i) {
-                        list.add((int) i);
+                for (u32 i = 0; i < n; ++i) list.add((int) i);
+                list.tryMerging();
+
+                std::string benchName = "[基础] move " + std::to_string(n) + " 元素";
+                globalBench.batch(1000).run(benchName.c_str(), [&] {
+                    for (int i = 0; i < 1000; ++i) {
+                        auto moved = std::move(list);
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
+                        list = std::move(moved);
+                        std::atomic_signal_fence(std::memory_order_seq_cst);
                     }
-                    list.tryMerging();
-
-                    static u64 samples[BENCH_TRIALS];
-                    QpcTimer timer;
-
-                    bool intact = true;
-
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        timer.start();
-                        for (u32 i = 0; i < kMoveIters; ++i) {
-                            auto moved = std::move(list);
-                            std::atomic_signal_fence(std::memory_order_seq_cst);
-                            list = std::move(moved);
-                            std::atomic_signal_fence(std::memory_order_seq_cst);
-                        }
-                        samples[t] = timer.stopNs() * 10000 / kMoveIters;
-
-                        if (!list.isValid() || list.presentElementCount() != n) {
-                            intact = false;
-                        }
-                    }
-
-                    if (!intact) {
-                        LOG("impossible");
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-
-                    double mean = 0.0;
-                    double sd = 0.0;
-                    u32 kept = 0;
-                    computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                    LOG("move ", n, " 元素：平均 ", mean / 10000.0, " ns/op，标准差 ", sd / 10000.0, " ns，最小 ", samples[0] / 10000.0, " ns，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 10000.0, " ns，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 10000.0, " ns，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 10000.0, " ns，最大 ", samples[BENCH_TRIALS - 1] / 10000.0, " ns（", kept, " 个样本通过 IQR，每轮 ", kMoveIters, " 次）");
-                }
+                });
             }
         }
 
         auto testBenchClearCost() -> void {
-            LOG("--- [性能] clear 成本（不同规模，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 sizes[] = { 100, 10000, 1000000 };
+            LOG("--- [性能] clear 成本 ---");
+            constexpr u32 sizes[] = { 100, 10000, 1000000 };
 
-                for (u32 n : sizes) {
-                    static u64 samples[BENCH_TRIALS];
-                    QpcTimer timer;
+            for (u32 n : sizes) {
+                auto list = IMPList<int>(1024, 1024);
+                list.configureMaintenanceMerging(false);
+                list.configureCompaction(false, 20, 10000);
 
-                    for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                        auto list = IMPList<int>(1024, 1024);
-                        list.configureMaintenanceMerging(false);
-                        list.configureCompaction(false, 20, 10000);
+                for (u32 i = 0; i < n; ++i) list.add((int) i);
+                list.tryMerging();
 
-                        for (u32 i = 0; i < n; ++i) {
-                            list.add((int) i);
-                        }
-                        list.tryMerging();
-
-                        timer.start();
-                        list.removeAll();
-                        samples[t] = timer.stopNs();
-                    }
-
-                    sortU64(samples, BENCH_TRIALS);
-
-                    double mean = 0.0;
-                    double sd = 0.0;
-                    u32 kept = 0;
-                    computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                    LOG("clear ", n, " 元素：平均 ", mean / 1e6, " ms，标准差 ", sd / 1e6, " ms，最小 ", samples[0] / 1e6, " ms，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1e6, " ms，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1e6, " ms，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1e6, " ms，最大 ", samples[BENCH_TRIALS - 1] / 1e6, " ms（", kept, " 个样本通过 IQR）");
-                }
+                std::string benchName = "[基础] clear " + std::to_string(n) + " 元素";
+                globalBench.batch(1).run(benchName.c_str(), [&] {
+                    list.removeAll();
+                });
             }
         }
 
@@ -3572,9 +2682,8 @@ namespace Catelier::test::architecture::imp {
 
                 constexpr u32 kRounds = 1000;
                 constexpr u32 kPerRound = 500;
-                QpcTimer timer;
 
-                timer.start();
+                std::chrono::high_resolution_clock::time_point start = std::chrono::high_resolution_clock::now();
                 for (u32 r = 0; r < kRounds; ++r) {
                     for (u32 i = 0; i < kPerRound; ++i) {
                         list.add((int) i);
@@ -3583,104 +2692,23 @@ namespace Catelier::test::architecture::imp {
                         list.tryMerging();
                     }
                 }
-                const u64 totalNs = timer.stopNs();
+                std::chrono::high_resolution_clock::time_point end = std::chrono::high_resolution_clock::now();
+                u64 totalNs = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
 
                 LOG(kRounds, " 轮 × ", kPerRound, " 元素：总耗时 ", totalNs / 1e6, " ms，最终 present = ", list.presentElementCount(), "，ingest = ", list.ingestElementCount());
             }
         }
 
-        // ============================================================
-        // [统计] 测试
-        // ============================================================
-
-        auto testStatsMergeDistribution() -> void {
-            LOG("--- [统计] 合并延迟分布（每次独立重建，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                static u64 samples[BENCH_TRIALS];
-                QpcTimer timer;
-
-                for (u32 t = 0; t < BENCH_TRIALS; ++t) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 20, 10000);
-
-                    for (int i = 0; i < 100000; ++i) {
-                        list.add(i);
-                    }
-                    list.tryMerging();
-
-                    for (int i = 0; i < 1000; ++i) {
-                        list.add(100000 + i);
-                    }
-
-                    timer.start();
-                    list.tryMerging();
-                    samples[t] = timer.stopNs();
-                }
-
-                sortU64(samples, BENCH_TRIALS);
-
-                double mean = 0.0;
-                double sd = 0.0;
-                u32 kept = 0;
-                computeMeanSdIqr(samples, BENCH_TRIALS, &mean, &sd, &kept);
-
-                LOG("增量 merge 延迟：平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us（", kept, " 个样本通过 IQR）");
-                LOG("  最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, BENCH_TRIALS, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, BENCH_TRIALS, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, BENCH_TRIALS, 0.99) / 1000.0, " us，最大 ", samples[BENCH_TRIALS - 1] / 1000.0, " us");
-                LOG("  每次 trial 独立重建：100000 基准元素 + 1000 增量元素，工作量恒定");
-            }
-        }
-
-        auto testStatsCompactDistribution() -> void {
-            LOG("--- [统计] 增量 compact 延迟分布（每次独立重建，IQR 剔除） ---");
-            LOGGER_INDENT_BLOCK(true) {
-                constexpr u32 kElements = 10000;
-                constexpr u32 kDiscards = 5000;
-                constexpr u32 kTrials = 11;
-                static u64 samples[kTrials];
-                QpcTimer timer;
-
-                for (u32 t = 0; t < kTrials; ++t) {
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureMaintenanceMerging(false);
-                    list.configureCompaction(false, 0, 1000000);
-
-                    for (u32 i = 0; i < kElements; ++i) {
-                        list.add((int) i);
-                    }
-                    list.tryMerging();
-                    list.awaitMerging();
-
-                    for (u32 i = 0; i < kDiscards; ++i) {
-                        list.remove((int) i);
-                    }
-                    list.tryMerging();
-                    list.awaitMerging();
-
-                    timer.start();
-                    list.tryCompacting();
-                    samples[t] = timer.stopNs();
-                }
-
-                sortU64(samples, kTrials);
-
-                double mean = 0.0;
-                double sd = 0.0;
-                u32 kept = 0;
-                computeMeanSdIqr(samples, kTrials, &mean, &sd, &kept);
-
-                LOG("增量 compact 延迟（1 万基准 + 5 千墓碑）：平均 ", mean / 1000.0, " us，标准差 ", sd / 1000.0, " us（", kept, " 个样本通过 IQR）");
-                LOG("  最小 ", samples[0] / 1000.0, " us，P50 ", computePercentile(samples, kTrials, 0.50) / 1000.0, " us，P90 ", computePercentile(samples, kTrials, 0.90) / 1000.0, " us，P99 ", computePercentile(samples, kTrials, 0.99) / 1000.0, " us，最大 ", samples[kTrials - 1] / 1000.0, " us");
-            }
-        }
     }
 
     auto runTests() -> void {
         LOG("===== IMPList 深度测试开始 =====");
+
+        // 全局 Nanobench 仅在此处初始化一次 title 和 unit
+        globalBench.title("IMPList Benchmarks").unit("op");
+
         LOGGER_INDENT_BLOCK(true) {
-            // ============================================================
             // [正确性]
-            // ============================================================
             testConstructAndLifecycle();
             testAddAndAddAll();
             testChunkBoundary();
@@ -3692,6 +2720,7 @@ namespace Catelier::test::architecture::imp {
             testDiscardWithAddTiming();
             testDiscardAllBasic();
             testDiscardAllWindowSemantics();
+            testDiscardAllDuringMerge();
             testCopyAndMove();
             testSortingStrategy();
             testFindContainsIndexOfUnordered();
@@ -3719,9 +2748,7 @@ namespace Catelier::test::architecture::imp {
             testCompactDisabledExplicit();
             testRepeatedTryCompacting();
 
-            // ============================================================
             // [并发]
-            // ============================================================
             testConcurrent4Writers();
             testConcurrentDiscardAdd();
             testConcurrentDiscardAllWindow();
@@ -3738,16 +2765,12 @@ namespace Catelier::test::architecture::imp {
             testStressCompactRemoveAdd();
             testThreadExitCallback();
 
-            // ============================================================
             // [内存]
-            // ============================================================
             testRepeatedConstruction();
             testCompactLongRunMemory();
             testIteratorRepeatedCreation();
 
-            // ============================================================
             // [性能]
-            // ============================================================
             testBenchAddLatency();
             testBenchDiscardLatency();
             testBenchDiscardAllLatency();
@@ -3773,17 +2796,20 @@ namespace Catelier::test::architecture::imp {
             testBenchMoveCost();
             testBenchClearCost();
 
-            // ============================================================
             // [稳定性]
-            // ============================================================
             testStabilityLongRun();
-
-            // ============================================================
-            // [统计]
-            // ============================================================
-            testStatsMergeDistribution();
-            testStatsCompactDistribution();
         }
+
+        // 导出 JSON 数据供论文画图
+        LOG("--- [导出] 导出 Nanobench 性能数据 ---");
+        std::ofstream out("nanobench_results.json");
+        if (out.is_open()) {
+            ankerl::nanobench::render(ankerl::nanobench::templates::json(), globalBench, out);
+            LOG("性能数据已保存至 nanobench_results.json");
+        } else {
+            LOG("无法打开 nanobench_results.json 进行写入");
+        }
+
         LOG("===== IMPList 深度测试结束 =====");
     }
 }
