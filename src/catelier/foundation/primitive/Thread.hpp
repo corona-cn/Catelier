@@ -20,4 +20,6 @@ namespace Catelier::src::foundation::primitive {
     auto Thread_detach(Thread* self) -> bool;
 
     auto Thread_yield() -> void;
+
+    auto Thread_sleepMs(u64 inMs) -> void;
 }

@@ -17,22 +17,15 @@ namespace Catelier::src::architecture::imp {
         namespace Internal {
             constexpr u64 DEFAULT_PROPAGATION_POLLING_INTERVAL_MS = 1;
             constexpr u64 DEFAULT_PROPAGATION_BACKOFF_INTERVAL_MS = 1;
-
-            constexpr usize DISCARD_LINEAR_THRESHOLD = 16;
-
             constexpr u32 DEFAULT_COMPACTION_THRESHOLD_PERCENT = 20;
             constexpr u64 DEFAULT_COMPACTION_INTERVAL_MS = 10000;
 
             namespace {
-                auto hashElementKey(const u64 inElementKey) -> usize {
-                    return ((usize) inElementKey) * ((usize) 0x9E3779B97F4A7C15ULL);
-                }
-
-                auto fnv1aHash64(const void* const inMemory, const usize inSize) -> u64 {
+                auto fnv1aHash64(const void* const inMem, const usize inSize) -> u64 {
                     constexpr u64 FNV_OFFSET_BASIS = 14695981039346656037ULL;
                     constexpr u64 FNV_PRIME = 1099511628211ULL;
 
-                    const auto* const bytes = (const u8*) inMemory;
+                    const u8* const bytes = (const u8*) inMem;
                     u64 hash = FNV_OFFSET_BASIS;
 
                     for (usize i = 0; i < inSize; ++i) {
@@ -456,7 +449,7 @@ namespace Catelier::src::architecture::imp {
                         IMPList_tryCompacting(self);
                     }
 
-                    Time_sleepMs(Atomic64_load(&self->propagationBackoffIntervalMs, MemoryOrder::ACQUIRE));
+                    Thread_sleepMs(Atomic64_load(&self->propagationBackoffIntervalMs, MemoryOrder::ACQUIRE));
                 }
             }
         }
@@ -1109,14 +1102,14 @@ namespace Catelier::src::architecture::imp {
 
         return true;
     }
-    auto IMPList_iteratorEnd(IMPList* const self, void* const handle) -> void {
+    auto IMPList_iteratorEnd(IMPList* const self, void* const inHandle) -> void {
         using namespace foundation::primitive;
 
-        if (!self || !handle) {
+        if (!self || !inHandle) {
             return;
         }
 
-        auto* const span = (IMPList::PresentElementsSpan*) handle;
+        auto* const span = (IMPList::PresentElementsSpan*) inHandle;
 
         if (Atomic64_fetchSub(&span->refCount, 1, MemoryOrder::ACQUIRE_RELEASE) == 1) {
             SpinLock_lock(&self->presentElementsSpanLock);
@@ -1129,6 +1122,7 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_add(IMPList* const self, const void* inElement) -> bool {
         using namespace foundation::primitive;
+
         if (!self || !inElement) {
             return false;
         }
@@ -1202,6 +1196,7 @@ namespace Catelier::src::architecture::imp {
     }
     auto IMPList_addAll(IMPList* const self, const void* inElements, const usize inElementCount) -> bool {
         using namespace foundation::primitive;
+
         if (!self || !inElements) {
             return false;
         }
@@ -1787,6 +1782,7 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_discard(IMPList* const self, const void* inElement) -> bool {
         using namespace foundation::primitive;
+
         if (!self || !inElement) {
             return false;
         }
@@ -2245,6 +2241,8 @@ namespace Catelier::src::architecture::imp {
         using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
+        constexpr usize HASH_ELEMENT_KEY_MULTIPLIER = (usize) 0x9E3779B97F4A7C15ULL;
+
         if (!self) {
             return false;
         }
@@ -2661,7 +2659,7 @@ namespace Catelier::src::architecture::imp {
         const u8** hashPointers = nullptr;
         usize hashTableSize = 0;
 
-        if (discardElements != nullptr && discardCount > Internal::DISCARD_LINEAR_THRESHOLD) {
+        if (discardElements != nullptr && discardCount > (usize) 16) {
             hashTableSize = 16;
             while (hashTableSize < discardCount * 2) {
                 hashTableSize <<= 1;
@@ -2681,7 +2679,7 @@ namespace Catelier::src::architecture::imp {
                     const u8* const discardElementPtr = discardElements + i * elementSize;
                     const u64 elementKey = Internal::fnv1aHash64(discardElementPtr, elementSize);
 
-                    usize hashSlotIndex = Internal::hashElementKey(elementKey) & (hashTableSize - 1);
+                    usize hashSlotIndex = (((usize) elementKey) * HASH_ELEMENT_KEY_MULTIPLIER) & (hashTableSize - 1);
                     while (localHashOccupied[hashSlotIndex]) {
                         if (localHashKeys[hashSlotIndex] == elementKey
                             && memcmp(localHashPointers[hashSlotIndex], discardElementPtr, elementSize) == 0) {
@@ -2841,7 +2839,7 @@ namespace Catelier::src::architecture::imp {
 
                                 const u64 elementKey = Internal::fnv1aHash64(ptr, elementSize);
 
-                                usize hashSlotIndex = Internal::hashElementKey(elementKey) & (hashTableSize - 1);
+                                usize hashSlotIndex = (((usize) elementKey) * HASH_ELEMENT_KEY_MULTIPLIER) & (hashTableSize - 1);
                                 while (localHashOccupied[hashSlotIndex]) {
                                     if (localHashKeys[hashSlotIndex] == elementKey
                                         && memcmp(localHashPointers[hashSlotIndex], ptr, elementSize) == 0) {

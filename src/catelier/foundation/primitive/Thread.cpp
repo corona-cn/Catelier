@@ -208,4 +208,19 @@ namespace Catelier::src::foundation::primitive {
 
         #endif
     }
+
+    auto Thread_sleepMs(const u64 inMs) -> void {
+        #ifdef _WIN32
+
+        Sleep((DWORD) inMs);
+
+        #else
+
+        struct timespec ts;
+        ts.tv_sec = (time_t) (inMs / 1000);
+        ts.tv_nsec = (long) ((inMs % 1000) * 1000000L);
+        nanosleep(&ts, nullptr);
+
+        #endif
+    }
 }

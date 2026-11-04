@@ -38,7 +38,7 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_last(const IMPList* self) -> const void*;
 
     auto IMPList_iteratorBegin(IMPList* self, void** outHandle, const u8** outElements, usize* outElementCount) -> bool;
-    auto IMPList_iteratorEnd(IMPList* self, void* handle) -> void;
+    auto IMPList_iteratorEnd(IMPList* self, void* inHandle) -> void;
 
     auto IMPList_add(IMPList* self, const void* inElement) -> bool;
     auto IMPList_addAll(IMPList* self, const void* inElements, usize inElementCount) -> bool;
