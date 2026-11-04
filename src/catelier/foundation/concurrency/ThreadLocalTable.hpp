@@ -1,6 +1,6 @@
 #pragma once
 #include "../../CommonPrimitives.hpp"
-#include "../primitive/Mutex.hpp"
+#include "../sync/lock/BlockingLock.hpp"
 
 namespace Catelier::src::foundation::concurrency {
     typedef struct ThreadLocalTableEntry {
@@ -24,7 +24,7 @@ namespace Catelier::src::foundation::concurrency {
 
         u64 generation;
 
-        primitive::Mutex lock;
+        sync::lock::BlockingLock lock;
 
         bool isValid;
     } ThreadLocalTable;

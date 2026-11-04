@@ -4,12 +4,12 @@
 #include "IMPList.hpp"
 #include "../../foundation/primitive/Atomic.hpp"
 #include "../../foundation/primitive/Thread.hpp"
-#include "../../foundation/primitive/Mutex.hpp"
-#include "../../foundation/primitive/SpinMutex.hpp"
+#include "../../foundation/sync/lock/BlockingLock.hpp"
+#include "../../foundation/sync/lock/SpinLock.hpp"
 #include "../../foundation/primitive/Time.hpp"
 #include "../../foundation/sync/ConditionalVar.hpp"
 #include "../../foundation/sync/ConflatedSignal.hpp"
-#include "../../foundation/concurrent/ConcurrentUnboundedQueue.hpp"
+#include "../../foundation/structure/linear/queue/concurrent/ConcurrentUnboundedQueue.hpp"
 #include "../../foundation/concurrency/ThreadLocalTable.hpp"
 
 namespace Catelier::src::architecture::imp {
@@ -110,7 +110,7 @@ namespace Catelier::src::architecture::imp {
 
         typedef struct alignas(64) ElementChunkBundle {
             ElementChunk* currentChunk;
-            foundation::concurrent::ConcurrentUnboundedQueue* sealedChunks;
+            foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue* sealedChunks;
 
             // 损坏标记，用于标记这个块包是否发生了破坏性突变（比如 remove），导致呈现数据作废，必须立刻被重新合并
             // 具体表现为合并结束后立刻重新触发一次合并
@@ -118,7 +118,7 @@ namespace Catelier::src::architecture::imp {
         } ElementChunkBundle;
 
         auto ElementChunkBundle_createValueCallback(void* const hostContext) -> void* {
-            using namespace foundation::concurrent;
+            using namespace foundation::structure::linear::queue::concurrent;
 
             (void) hostContext;
 
@@ -141,7 +141,7 @@ namespace Catelier::src::architecture::imp {
         }
         auto ElementChunkBundle_destroyValueCallback(void* const value, void* const hostContext) -> void {
             using namespace foundation::primitive;
-            using namespace foundation::concurrent;
+            using namespace foundation::structure::linear::queue::concurrent;
 
             (void) hostContext;
 
@@ -175,7 +175,7 @@ namespace Catelier::src::architecture::imp {
 
         auto ElementChunkBundle_valueThreadExitCallback(void* const value, void* const hostContext) -> void* {
             using namespace foundation::primitive;
-            using namespace foundation::concurrent;
+            using namespace foundation::structure::linear::queue::concurrent;
 
             auto* const bundle = (ElementChunkBundle*) value;
 
@@ -243,12 +243,12 @@ namespace Catelier::src::architecture::imp {
     namespace {
         typedef struct alignas(64) DiscardBufferBundle {
             DiscardBuffer* currentBuffer;
-            foundation::concurrent::ConcurrentUnboundedQueue* sealedBuffers;
-            foundation::concurrent::ConcurrentUnboundedQueue* recycledBuffers;
+            foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue* sealedBuffers;
+            foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue* recycledBuffers;
         } DiscardBufferBundle;
 
         auto DiscardBufferBundle_createValueCallback(void* const hostContext) -> void* {
-            using namespace foundation::concurrent;
+            using namespace foundation::structure::linear::queue::concurrent;
 
             (void) hostContext;
 
@@ -276,7 +276,7 @@ namespace Catelier::src::architecture::imp {
         }
         auto DiscardBufferBundle_destroyValueCallback(void* const value, void* const hostContext) -> void {
             using namespace foundation::primitive;
-            using namespace foundation::concurrent;
+            using namespace foundation::structure::linear::queue::concurrent;
 
             (void) hostContext;
 
@@ -325,7 +325,7 @@ namespace Catelier::src::architecture::imp {
 
         auto DiscardBufferBundle_valueThreadExitCallback(void* const value, void* const hostContext) -> void* {
             using namespace foundation::primitive;
-            using namespace foundation::concurrent;
+            using namespace foundation::structure::linear::queue::concurrent;
 
             auto* const bundle = (DiscardBufferBundle*) value;
 
@@ -373,9 +373,9 @@ namespace Catelier::src::architecture::imp {
 
         alignas(64) PresentElementsSpan* presentElementsSpan;
         PresentElementsSpan* sparePresentElementsSpan;
-        foundation::primitive::SpinMutex presentElementsSpanLock;
+        foundation::sync::lock::SpinLock presentElementsSpanLock;
 
-        foundation::primitive::SpinMutex sealedChunksLock;
+        foundation::sync::lock::SpinLock sealedChunksLock;
 
         foundation::concurrency::ThreadLocalTable chunkBundleThreadLocalTable;
         foundation::concurrency::ThreadLocalTable discardBufferBundleThreadLocalTable;
@@ -395,15 +395,15 @@ namespace Catelier::src::architecture::imp {
         alignas(64) bool isMergeSignaled;
         bool isMergeExecuting;
         bool isMaintenanceMergingEnabled;
-        foundation::primitive::Mutex mergeMutex;
-        foundation::primitive::Mutex awaitMergingMutex;
+        foundation::sync::lock::BlockingLock mergeBlockingLock;
+        foundation::sync::lock::BlockingLock awaitMergingBlockingLock;
         foundation::sync::ConditionalVar awaitMergingCondition;
         u64 mergeCount;
         u64 lastMergeDurationMs;
 
         alignas(64) bool isCompactionSignaled;
         bool isCompactionExecuting;
-        foundation::primitive::Mutex awaitCompactingMutex;
+        foundation::sync::lock::BlockingLock awaitCompactingBlockingLock;
         foundation::sync::ConditionalVar awaitCompactingCondition;
         u64 compactionCount;
         u64 lastCompactionDurationMs;
@@ -441,13 +441,13 @@ namespace Catelier::src::architecture::imp {
                         if (AtomicBool_load(&self->isMaintenanceMergingEnabled, MemoryOrder::ACQUIRE)) {
                             IMPList_tryMerging(self);
                         } else {
-                            Mutex_lock(&self->awaitMergingMutex);
+                            BlockingLock_lock(&self->awaitMergingBlockingLock);
 
                             AtomicBool_store(&self->isMergeSignaled, false, MemoryOrder::RELEASE);
 
                             ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                            Mutex_unlock(&self->awaitMergingMutex);
+                            BlockingLock_unlock(&self->awaitMergingBlockingLock);
                         }
                     }
 
@@ -543,83 +543,83 @@ namespace Catelier::src::architecture::imp {
         self->compactionCount = 0;
         self->lastCompactionDurationMs = 0;
 
-        if (!SpinMutex_init(&self->presentElementsSpanLock)) {
+        if (!SpinLock_init(&self->presentElementsSpanLock)) {
             free(self);
             return nullptr;
         }
 
-        if (!SpinMutex_init(&self->sealedChunksLock)) {
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+        if (!SpinLock_init(&self->sealedChunksLock)) {
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
         if (!ConflatedSignal_init(&self->maintenanceTrigger)) {
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
-        if (!Mutex_init(&self->awaitMergingMutex)) {
+        if (!BlockingLock_init(&self->awaitMergingBlockingLock)) {
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
         if (!ConditionalVar_init(&self->awaitMergingCondition)) {
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
-        if (!Mutex_init(&self->mergeMutex)) {
+        if (!BlockingLock_init(&self->mergeBlockingLock)) {
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
-        if (!Mutex_init(&self->awaitCompactingMutex)) {
-            Mutex_destroy(&self->mergeMutex);
+        if (!BlockingLock_init(&self->awaitCompactingBlockingLock)) {
+            BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
         if (!ConditionalVar_init(&self->awaitCompactingCondition)) {
-            Mutex_destroy(&self->awaitCompactingMutex);
-            Mutex_destroy(&self->mergeMutex);
+            BlockingLock_destroy(&self->awaitCompactingBlockingLock);
+            BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
 
         if (!ThreadLocalTable_construct(&self->chunkBundleThreadLocalTable, ElementChunkBundle_createValueCallback, ElementChunkBundle_valueThreadExitCallback, ElementChunkBundle_destroyValueCallback, self)) {
             ConditionalVar_destroy(&self->awaitCompactingCondition);
-            Mutex_destroy(&self->awaitCompactingMutex);
-            Mutex_destroy(&self->mergeMutex);
+            BlockingLock_destroy(&self->awaitCompactingBlockingLock);
+            BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -627,13 +627,13 @@ namespace Catelier::src::architecture::imp {
         if (!ThreadLocalTable_construct(&self->discardBufferBundleThreadLocalTable, DiscardBufferBundle_createValueCallback, DiscardBufferBundle_valueThreadExitCallback, DiscardBufferBundle_destroyValueCallback, self)) {
             ThreadLocalTable_destruct(&self->chunkBundleThreadLocalTable);
             ConditionalVar_destroy(&self->awaitCompactingCondition);
-            Mutex_destroy(&self->awaitCompactingMutex);
-            Mutex_destroy(&self->mergeMutex);
+            BlockingLock_destroy(&self->awaitCompactingBlockingLock);
+            BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -642,13 +642,13 @@ namespace Catelier::src::architecture::imp {
             ThreadLocalTable_destruct(&self->discardBufferBundleThreadLocalTable);
             ThreadLocalTable_destruct(&self->chunkBundleThreadLocalTable);
             ConditionalVar_destroy(&self->awaitCompactingCondition);
-            Mutex_destroy(&self->awaitCompactingMutex);
-            Mutex_destroy(&self->mergeMutex);
+            BlockingLock_destroy(&self->awaitCompactingBlockingLock);
+            BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -658,13 +658,13 @@ namespace Catelier::src::architecture::imp {
             ThreadLocalTable_destruct(&self->discardBufferBundleThreadLocalTable);
             ThreadLocalTable_destruct(&self->chunkBundleThreadLocalTable);
             ConditionalVar_destroy(&self->awaitCompactingCondition);
-            Mutex_destroy(&self->awaitCompactingMutex);
-            Mutex_destroy(&self->mergeMutex);
+            BlockingLock_destroy(&self->awaitCompactingBlockingLock);
+            BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
-            Mutex_destroy(&self->awaitMergingMutex);
+            BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
-            SpinMutex_destroy(&self->sealedChunksLock);
-            SpinMutex_destroy(&self->presentElementsSpanLock);
+            SpinLock_destroy(&self->sealedChunksLock);
+            SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
         }
@@ -717,13 +717,13 @@ namespace Catelier::src::architecture::imp {
             free(self->mergeDiscardElements);
         }
 
-        SpinMutex_destroy(&self->sealedChunksLock);
-        SpinMutex_destroy(&self->presentElementsSpanLock);
+        SpinLock_destroy(&self->sealedChunksLock);
+        SpinLock_destroy(&self->presentElementsSpanLock);
         ConditionalVar_destroy(&self->awaitCompactingCondition);
-        Mutex_destroy(&self->awaitCompactingMutex);
-        Mutex_destroy(&self->mergeMutex);
+        BlockingLock_destroy(&self->awaitCompactingBlockingLock);
+        BlockingLock_destroy(&self->mergeBlockingLock);
         ConditionalVar_destroy(&self->awaitMergingCondition);
-        Mutex_destroy(&self->awaitMergingMutex);
+        BlockingLock_destroy(&self->awaitMergingBlockingLock);
 
         free(self);
 
@@ -732,7 +732,7 @@ namespace Catelier::src::architecture::imp {
     auto IMPList_copy(const IMPList* const self) -> IMPList* {
         using namespace foundation::primitive;
         using namespace foundation::concurrency;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
 
         if (!self) {
             return nullptr;
@@ -851,7 +851,7 @@ namespace Catelier::src::architecture::imp {
         AtomicBool_store(&self->isPresentElementsSpanRecyclingEnabled, inIsPresentElementsSpanRecyclingEnabled, MemoryOrder::RELEASE);
 
         if (!inIsPresentElementsSpanRecyclingEnabled) {
-            SpinMutex_lock(&self->presentElementsSpanLock);
+            SpinLock_lock(&self->presentElementsSpanLock);
 
             if (self->sparePresentElementsSpan) {
                 if (self->sparePresentElementsSpan->elements) {
@@ -861,7 +861,7 @@ namespace Catelier::src::architecture::imp {
                 self->sparePresentElementsSpan = nullptr;
             }
 
-            SpinMutex_unlock(&self->presentElementsSpanLock);
+            SpinLock_unlock(&self->presentElementsSpanLock);
         }
 
         return true;
@@ -947,13 +947,13 @@ namespace Catelier::src::architecture::imp {
     }
     auto IMPList_ingestElementCount(const IMPList* const self) -> usize {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
 
         if (!self) {
             return 0;
         }
 
-        SpinMutex_lock(&((IMPList*) self)->sealedChunksLock);
+        SpinLock_lock(&((IMPList*) self)->sealedChunksLock);
 
         usize total = 0;
 
@@ -976,19 +976,19 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&((IMPList*) self)->sealedChunksLock);
+        SpinLock_unlock(&((IMPList*) self)->sealedChunksLock);
 
         return total;
     }
     auto IMPList_mergeElementCount(const IMPList* const self) -> usize {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
 
         if (!self) {
             return 0;
         }
 
-        SpinMutex_lock(&((IMPList*) self)->sealedChunksLock);
+        SpinLock_lock(&((IMPList*) self)->sealedChunksLock);
 
         usize total = 0;
 
@@ -1006,7 +1006,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&((IMPList*) self)->sealedChunksLock);
+        SpinLock_unlock(&((IMPList*) self)->sealedChunksLock);
 
         return total;
     }
@@ -1090,17 +1090,17 @@ namespace Catelier::src::architecture::imp {
         *outElements = nullptr;
         *outElementCount = 0;
 
-        SpinMutex_lock(&self->presentElementsSpanLock);
+        SpinLock_lock(&self->presentElementsSpanLock);
 
         auto* const span = (IMPList::PresentElementsSpan*) AtomicPtr_load((void* const*) &self->presentElementsSpan, MemoryOrder::ACQUIRE);
         if (!span) {
-            SpinMutex_unlock(&self->presentElementsSpanLock);
+            SpinLock_unlock(&self->presentElementsSpanLock);
             return true;
         }
 
         Atomic64_fetchAdd(&span->refCount, 1, MemoryOrder::ACQUIRE_RELEASE);
 
-        SpinMutex_unlock(&self->presentElementsSpanLock);
+        SpinLock_unlock(&self->presentElementsSpanLock);
 
         *outHandle = (void*) span;
         *outElements = span->elements;
@@ -1117,13 +1117,13 @@ namespace Catelier::src::architecture::imp {
 
         auto* const span = (IMPList::PresentElementsSpan*) handle;
 
-        SpinMutex_lock(&self->presentElementsSpanLock);
+        SpinLock_lock(&self->presentElementsSpanLock);
 
         if (Atomic64_fetchSub(&span->refCount, 1, MemoryOrder::ACQUIRE_RELEASE) == 1) {
             IMPList_recyclePresentElementsSpan(self, span);
         }
 
-        SpinMutex_unlock(&self->presentElementsSpanLock);
+        SpinLock_unlock(&self->presentElementsSpanLock);
     }
 
     auto IMPList_add(IMPList* const self, const void* inElement) -> bool {
@@ -1156,7 +1156,7 @@ namespace Catelier::src::architecture::imp {
                     // 若旧状态已被他者抢先置为无效状态，他者已负责入队，则当前线程须跳过入队以避免重复入队
                     if (AtomicBool_exchange(&currentChunk->isValid, false, MemoryOrder::ACQUIRE_RELEASE)) {
                         // 将当前块指针入队（拷贝入队）当前块包的封装块队列
-                        foundation::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedChunks, &currentChunk);
+                        foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedChunks, &currentChunk);
                     }
 
                     // 当前块指针已被拷贝入队（或已由他者入队），将当前块指针置空
@@ -1239,7 +1239,7 @@ namespace Catelier::src::architecture::imp {
                         // 若旧状态已被他者抢先置为无效状态，他者已负责入队，则当前线程须跳过入队以避免重复入队
                         if (AtomicBool_exchange(&currentChunk->isValid, false, MemoryOrder::ACQUIRE_RELEASE)) {
                             // 将当前块指针入队（拷贝入队）当前块包的封装块队列
-                            foundation::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedChunks, &currentChunk);
+                            foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedChunks, &currentChunk);
                         }
 
                         // 当前块指针已被拷贝入队（或已由他者入队），将当前块指针置空
@@ -1294,14 +1294,14 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_remove(IMPList* const self, const void* const inElement) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self || !inElement) {
             return false;
         }
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1374,7 +1374,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1389,14 +1389,14 @@ namespace Catelier::src::architecture::imp {
     }
     auto IMPList_removeIf(IMPList* const self, bool (*inPredicate)(const void*, void*), void* const inPredicateContext) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self || !inPredicate) {
             return false;
         }
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1469,7 +1469,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1484,14 +1484,14 @@ namespace Catelier::src::architecture::imp {
     }
     auto IMPList_removeExcept(IMPList* const self, const void* const inElements, const usize inElementCount) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self || !inElements || inElementCount == 0) {
             return false;
         }
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1586,7 +1586,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1601,14 +1601,14 @@ namespace Catelier::src::architecture::imp {
     }
     auto IMPList_removeExceptIf(IMPList* const self, bool (*inPredicate)(const void*, void*), void* const inPredicateContext) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self || !inPredicate) {
             return false;
         }
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1681,7 +1681,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1696,14 +1696,14 @@ namespace Catelier::src::architecture::imp {
     }
     auto IMPList_removeAll(IMPList* const self) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self) {
             return false;
         }
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         bool removed = false;
 
@@ -1770,7 +1770,7 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         if (removed) {
             if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
@@ -1814,7 +1814,7 @@ namespace Catelier::src::architecture::imp {
                     // 若旧状态已被他者抢先置为无效状态，他者已负责入队，则当前线程须跳过入队以避免重复入队
                     if (AtomicBool_exchange(&currentBuffer->isValid, false, MemoryOrder::ACQUIRE_RELEASE)) {
                         // 将当前缓存指针入队（拷贝入队）当前缓存包的封装缓存队列
-                        foundation::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedBuffers, &currentBuffer);
+                        foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue_enqueue(currentBundle->sealedBuffers, &currentBuffer);
                     }
 
                     // 当前缓存指针已被拷贝入队（或已由他者入队），将当前缓存指针置空
@@ -1829,7 +1829,7 @@ namespace Catelier::src::architecture::imp {
         // 当前缓存不存在情况（本来就不存在，又或者是被成功封装后被置空）
         if (!currentBuffer) {
             // 尝试从回收队列复用
-            void* const slot = foundation::concurrent::ConcurrentUnboundedQueue_dequeueSlot(currentBundle->recycledBuffers);
+            void* const slot = foundation::structure::linear::queue::concurrent::ConcurrentUnboundedQueue_dequeueSlot(currentBundle->recycledBuffers);
             if (slot) {
                 currentBuffer = *(DiscardBuffer**) slot;
                 free(slot);
@@ -2241,7 +2241,7 @@ namespace Catelier::src::architecture::imp {
 
     auto IMPList_tryMerging(IMPList* const self) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self) {
@@ -2268,13 +2268,13 @@ namespace Catelier::src::architecture::imp {
             if (!newChunks) {
                 AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-                Mutex_lock(&self->awaitMergingMutex);
+                BlockingLock_lock(&self->awaitMergingBlockingLock);
 
                 AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
                 ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                Mutex_unlock(&self->awaitMergingMutex);
+                BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
                 ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2286,13 +2286,13 @@ namespace Catelier::src::architecture::imp {
             if (!newElementCounts) {
                 AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-                Mutex_lock(&self->awaitMergingMutex);
+                BlockingLock_lock(&self->awaitMergingBlockingLock);
 
                 AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
                 ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                Mutex_unlock(&self->awaitMergingMutex);
+                BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
                 ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2313,7 +2313,7 @@ namespace Catelier::src::architecture::imp {
         usize totalElementCount = 0;
         bool collectFailed = false;
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
@@ -2433,17 +2433,17 @@ namespace Catelier::src::architecture::imp {
                 AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
             }
 
-            SpinMutex_unlock(&self->sealedChunksLock);
+            SpinLock_unlock(&self->sealedChunksLock);
 
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-            Mutex_lock(&self->awaitMergingMutex);
+            BlockingLock_lock(&self->awaitMergingBlockingLock);
 
             AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
             ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-            Mutex_unlock(&self->awaitMergingMutex);
+            BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
             ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2496,17 +2496,17 @@ namespace Catelier::src::architecture::imp {
                         AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
                     }
 
-                    SpinMutex_unlock(&self->sealedChunksLock);
+                    SpinLock_unlock(&self->sealedChunksLock);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-                    Mutex_lock(&self->awaitMergingMutex);
+                    BlockingLock_lock(&self->awaitMergingBlockingLock);
 
                     AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
                     ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                    Mutex_unlock(&self->awaitMergingMutex);
+                    BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
                     ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2638,17 +2638,17 @@ namespace Catelier::src::architecture::imp {
                 AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
             }
 
-            SpinMutex_unlock(&self->sealedChunksLock);
+            SpinLock_unlock(&self->sealedChunksLock);
 
             AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-            Mutex_lock(&self->awaitMergingMutex);
+            BlockingLock_lock(&self->awaitMergingBlockingLock);
 
             AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
             ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-            Mutex_unlock(&self->awaitMergingMutex);
+            BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
             ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2700,14 +2700,14 @@ namespace Catelier::src::architecture::imp {
         IMPList::PresentElementsSpan* newSpan = nullptr;
 
         if (totalElementCount > 0) {
-            SpinMutex_lock(&self->presentElementsSpanLock);
+            SpinLock_lock(&self->presentElementsSpanLock);
 
             if (AtomicBool_load(&self->isPresentElementsSpanRecyclingEnabled, MemoryOrder::RELAXED) && self->sparePresentElementsSpan) {
                 newSpan = self->sparePresentElementsSpan;
                 self->sparePresentElementsSpan = nullptr;
             }
 
-            SpinMutex_unlock(&self->presentElementsSpanLock);
+            SpinLock_unlock(&self->presentElementsSpanLock);
 
             if (newSpan) {
                 if (newSpan->capacity < totalElementCount) {
@@ -2738,17 +2738,17 @@ namespace Catelier::src::architecture::imp {
                         AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
                     }
 
-                    SpinMutex_unlock(&self->sealedChunksLock);
+                    SpinLock_unlock(&self->sealedChunksLock);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-                    Mutex_lock(&self->awaitMergingMutex);
+                    BlockingLock_lock(&self->awaitMergingBlockingLock);
 
                     AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
                     ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                    Mutex_unlock(&self->awaitMergingMutex);
+                    BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
                     ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2767,17 +2767,17 @@ namespace Catelier::src::architecture::imp {
                         AtomicBool_store(&self->isDiscardAllSignaled, true, MemoryOrder::RELEASE);
                     }
 
-                    SpinMutex_unlock(&self->sealedChunksLock);
+                    SpinLock_unlock(&self->sealedChunksLock);
 
                     AtomicBool_store(&self->isMergeSignaled, true, MemoryOrder::RELEASE);
 
-                    Mutex_lock(&self->awaitMergingMutex);
+                    BlockingLock_lock(&self->awaitMergingBlockingLock);
 
                     AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
                     ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-                    Mutex_unlock(&self->awaitMergingMutex);
+                    BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
                     ConflatedSignal_signal(&self->maintenanceTrigger);
 
@@ -2909,15 +2909,15 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         free(hashKeys);
         free(hashOccupied);
         free(hashPointers);
 
-        Mutex_lock(&self->mergeMutex);
+        BlockingLock_lock(&self->mergeBlockingLock);
 
-        SpinMutex_lock(&self->presentElementsSpanLock);
+        SpinLock_lock(&self->presentElementsSpanLock);
 
         auto* const oldSpan = (IMPList::PresentElementsSpan*) AtomicPtr_exchange((void**) &self->presentElementsSpan, (void*) newSpan, MemoryOrder::ACQUIRE_RELEASE);
 
@@ -2927,9 +2927,9 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->presentElementsSpanLock);
+        SpinLock_unlock(&self->presentElementsSpanLock);
 
-        Mutex_unlock(&self->mergeMutex);
+        BlockingLock_unlock(&self->mergeBlockingLock);
 
         Atomic64_fetchAdd(&self->mergeCount, 1, MemoryOrder::RELAXED);
         Atomic64_store(&self->lastMergeDurationMs, Time_currentMs() - mergeStartTimeMs, MemoryOrder::RELAXED);
@@ -2951,13 +2951,13 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        Mutex_lock(&self->awaitMergingMutex);
+        BlockingLock_lock(&self->awaitMergingBlockingLock);
 
         AtomicBool_store(&self->isMergeExecuting, false, MemoryOrder::RELEASE);
 
         ConditionalVar_broadcast(&self->awaitMergingCondition);
 
-        Mutex_unlock(&self->awaitMergingMutex);
+        BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
         return true;
     }
@@ -2971,13 +2971,13 @@ namespace Catelier::src::architecture::imp {
 
         ConflatedSignal_signal(&self->maintenanceTrigger);
 
-        Mutex_lock(&self->awaitMergingMutex);
+        BlockingLock_lock(&self->awaitMergingBlockingLock);
 
         while (AtomicBool_load(&self->isMergeExecuting, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isMergeSignaled, MemoryOrder::ACQUIRE)) {
-            ConditionalVar_wait(&self->awaitMergingCondition, &self->awaitMergingMutex);
+            ConditionalVar_wait(&self->awaitMergingCondition, &self->awaitMergingBlockingLock);
         }
 
-        Mutex_unlock(&self->awaitMergingMutex);
+        BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
         return true;
     }
@@ -2991,25 +2991,25 @@ namespace Catelier::src::architecture::imp {
 
         ConflatedSignal_signal(&self->maintenanceTrigger);
 
-        Mutex_lock(&self->awaitMergingMutex);
+        BlockingLock_lock(&self->awaitMergingBlockingLock);
 
         bool result = true;
 
         while (AtomicBool_load(&self->isMergeExecuting, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isMergeSignaled, MemoryOrder::ACQUIRE)) {
-            if (inTimeoutMs == 0 || !ConditionalVar_timedWait(&self->awaitMergingCondition, &self->awaitMergingMutex, inTimeoutMs)) {
+            if (inTimeoutMs == 0 || !ConditionalVar_timedWait(&self->awaitMergingCondition, &self->awaitMergingBlockingLock, inTimeoutMs)) {
                 result = false;
                 break;
             }
         }
 
-        Mutex_unlock(&self->awaitMergingMutex);
+        BlockingLock_unlock(&self->awaitMergingBlockingLock);
 
         return result;
     }
 
     auto IMPList_tryCompacting(IMPList* const self) -> bool {
         using namespace foundation::primitive;
-        using namespace foundation::concurrent;
+        using namespace foundation::structure::linear::queue::concurrent;
         using namespace foundation::sync;
 
         if (!self) {
@@ -3031,7 +3031,7 @@ namespace Catelier::src::architecture::imp {
 
         AtomicBool_store(&self->isCompactionSignaled, false, MemoryOrder::RELAXED);
 
-        SpinMutex_lock(&self->sealedChunksLock);
+        SpinLock_lock(&self->sealedChunksLock);
 
         for (auto* entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &self->chunkBundleThreadLocalTable.headEntry, MemoryOrder::ACQUIRE); entry; entry = (foundation::concurrency::ThreadLocalTableEntry*) AtomicPtr_load((void* const*) &entry->nextInOwner, MemoryOrder::ACQUIRE)) {
             auto* const bundle = (ElementChunkBundle*) entry->value;
@@ -3078,18 +3078,18 @@ namespace Catelier::src::architecture::imp {
             }
         }
 
-        SpinMutex_unlock(&self->sealedChunksLock);
+        SpinLock_unlock(&self->sealedChunksLock);
 
         Atomic64_store(&self->lastCompactionDurationMs, Time_currentMs() - compactionStartTimeMs, MemoryOrder::RELAXED);
         Atomic64_fetchAdd(&self->compactionCount, 1, MemoryOrder::RELAXED);
 
-        Mutex_lock(&self->awaitCompactingMutex);
+        BlockingLock_lock(&self->awaitCompactingBlockingLock);
 
         AtomicBool_store(&self->isCompactionExecuting, false, MemoryOrder::RELEASE);
 
         ConditionalVar_broadcast(&self->awaitCompactingCondition);
 
-        Mutex_unlock(&self->awaitCompactingMutex);
+        BlockingLock_unlock(&self->awaitCompactingBlockingLock);
 
         if (!AtomicBool_load(&self->isMergeSignaled, MemoryOrder::RELAXED)) {
             bool expectedSignaled = false;
@@ -3110,13 +3110,13 @@ namespace Catelier::src::architecture::imp {
 
         ConflatedSignal_signal(&self->maintenanceTrigger);
 
-        Mutex_lock(&self->awaitCompactingMutex);
+        BlockingLock_lock(&self->awaitCompactingBlockingLock);
 
         while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::ACQUIRE)) {
-            ConditionalVar_wait(&self->awaitCompactingCondition, &self->awaitCompactingMutex);
+            ConditionalVar_wait(&self->awaitCompactingCondition, &self->awaitCompactingBlockingLock);
         }
 
-        Mutex_unlock(&self->awaitCompactingMutex);
+        BlockingLock_unlock(&self->awaitCompactingBlockingLock);
 
         return true;
     }
@@ -3130,18 +3130,18 @@ namespace Catelier::src::architecture::imp {
 
         ConflatedSignal_signal(&self->maintenanceTrigger);
 
-        Mutex_lock(&self->awaitCompactingMutex);
+        BlockingLock_lock(&self->awaitCompactingBlockingLock);
 
         bool result = true;
 
         while (AtomicBool_load(&self->isCompactionExecuting, MemoryOrder::ACQUIRE) || AtomicBool_load(&self->isCompactionSignaled, MemoryOrder::ACQUIRE)) {
-            if (inTimeoutMs == 0 || !ConditionalVar_timedWait(&self->awaitCompactingCondition, &self->awaitCompactingMutex, inTimeoutMs)) {
+            if (inTimeoutMs == 0 || !ConditionalVar_timedWait(&self->awaitCompactingCondition, &self->awaitCompactingBlockingLock, inTimeoutMs)) {
                 result = false;
                 break;
             }
         }
 
-        Mutex_unlock(&self->awaitCompactingMutex);
+        BlockingLock_unlock(&self->awaitCompactingBlockingLock);
 
         return result;
     }

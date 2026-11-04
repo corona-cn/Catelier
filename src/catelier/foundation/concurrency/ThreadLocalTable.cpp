@@ -27,7 +27,7 @@ namespace Catelier::src::foundation::concurrency {
     }
 
     namespace {
-        primitive::Mutex lifetimeLock = {};
+        sync::lock::BlockingLock lifetimeLock = {};
     }
 
     namespace {
@@ -108,7 +108,7 @@ namespace Catelier::src::foundation::concurrency {
             }
 
             if (zombieCount > 0) {
-                primitive::Mutex_lock(&lifetimeLock);
+                sync::lock::BlockingLock_lock(&lifetimeLock);
 
                 ThreadLocalTableEntry* zombie = zombies;
                 while (zombie) {
@@ -120,7 +120,7 @@ namespace Catelier::src::foundation::concurrency {
                     zombie = next;
                 }
 
-                primitive::Mutex_unlock(&lifetimeLock);
+                sync::lock::BlockingLock_unlock(&lifetimeLock);
             }
 
             free(oldBuckets);
@@ -158,7 +158,7 @@ namespace Catelier::src::foundation::concurrency {
                 return;
             }
 
-            primitive::Mutex_lock(&lifetimeLock);
+            sync::lock::BlockingLock_lock(&lifetimeLock);
 
             for (usize i = 0; i < registry->bucketCount; ++i) {
                 ThreadLocalTableEntry** link = &registry->buckets[i];
@@ -182,13 +182,13 @@ namespace Catelier::src::foundation::concurrency {
                 }
             }
 
-            primitive::Mutex_unlock(&lifetimeLock);
+            sync::lock::BlockingLock_unlock(&lifetimeLock);
 
             Registry_destroy(registry);
         }
 
         auto initGlobalState() -> void {
-            primitive::Mutex_init(&lifetimeLock);
+            sync::lock::BlockingLock_init(&lifetimeLock);
 
             #ifdef _WIN32
 
@@ -275,7 +275,7 @@ namespace Catelier::src::foundation::concurrency {
 
         self->generation = primitive::Atomic64_fetchAdd(&generationCounter, 1, primitive::MemoryOrder::RELAXED) + 1;
 
-        if (!primitive::Mutex_init(&self->lock)) {
+        if (!sync::lock::BlockingLock_init(&self->lock)) {
             return false;
         }
 
@@ -288,9 +288,9 @@ namespace Catelier::src::foundation::concurrency {
             return false;
         }
 
-        primitive::Mutex_lock(&lifetimeLock);
+        sync::lock::BlockingLock_lock(&lifetimeLock);
 
-        primitive::Mutex_lock(&self->lock);
+        sync::lock::BlockingLock_lock(&self->lock);
 
         self->isValid = false;
 
@@ -299,7 +299,7 @@ namespace Catelier::src::foundation::concurrency {
         self->headEntry = nullptr;
         self->entryCount = 0;
 
-        primitive::Mutex_unlock(&self->lock);
+        sync::lock::BlockingLock_unlock(&self->lock);
 
         ThreadLocalTableEntry* entry = orphaned;
         while (entry) {
@@ -319,9 +319,9 @@ namespace Catelier::src::foundation::concurrency {
             entry = next;
         }
 
-        primitive::Mutex_destroy(&self->lock);
+        sync::lock::BlockingLock_destroy(&self->lock);
 
-        primitive::Mutex_unlock(&lifetimeLock);
+        sync::lock::BlockingLock_unlock(&lifetimeLock);
 
         return true;
     }
@@ -339,7 +339,7 @@ namespace Catelier::src::foundation::concurrency {
 
         self->generation = primitive::Atomic64_fetchAdd(&generationCounter, 1, primitive::MemoryOrder::RELAXED) + 1;
 
-        if (!primitive::Mutex_init(&self->lock)) {
+        if (!sync::lock::BlockingLock_init(&self->lock)) {
             return false;
         }
 
@@ -352,7 +352,7 @@ namespace Catelier::src::foundation::concurrency {
             return false;
         }
 
-        if (!primitive::Mutex_init(&self->lock)) {
+        if (!sync::lock::BlockingLock_init(&self->lock)) {
             return false;
         }
 
@@ -365,13 +365,13 @@ namespace Catelier::src::foundation::concurrency {
         self->generation = source->generation;
         self->isValid = true;
 
-        primitive::Mutex_lock(&lifetimeLock);
+        sync::lock::BlockingLock_lock(&lifetimeLock);
 
         for (ThreadLocalTableEntry* entry = self->headEntry; entry; entry = entry->nextInOwner) {
             primitive::AtomicPtr_store((void**) &entry->owner, (void*) self, primitive::MemoryOrder::RELEASE);
         }
 
-        primitive::Mutex_unlock(&lifetimeLock);
+        sync::lock::BlockingLock_unlock(&lifetimeLock);
 
         source->headEntry = nullptr;
         source->entryCount = 0;
@@ -381,7 +381,7 @@ namespace Catelier::src::foundation::concurrency {
         source->hostContext = nullptr;
         source->generation = 0;
 
-        primitive::Mutex_destroy(&source->lock);
+        sync::lock::BlockingLock_destroy(&source->lock);
 
         source->isValid = false;
 
@@ -476,7 +476,7 @@ namespace Catelier::src::foundation::concurrency {
             }
 
             if (currentOwner == nullptr) {
-                primitive::Mutex_lock(&lifetimeLock);
+                sync::lock::BlockingLock_lock(&lifetimeLock);
 
                 ThreadLocalTableEntry** current = &registry->buckets[bucketIndex];
                 while (*current) {
@@ -498,7 +498,7 @@ namespace Catelier::src::foundation::concurrency {
                         registry->cachedGeneration = self->generation;
                         registry->cachedValue = scan->value;
 
-                        primitive::Mutex_unlock(&lifetimeLock);
+                        sync::lock::BlockingLock_unlock(&lifetimeLock);
 
                         return scan->value;
                     }
@@ -506,7 +506,7 @@ namespace Catelier::src::foundation::concurrency {
                     scan = scan->nextInBucket;
                 }
 
-                primitive::Mutex_unlock(&lifetimeLock);
+                sync::lock::BlockingLock_unlock(&lifetimeLock);
 
                 break;
             }
@@ -531,10 +531,10 @@ namespace Catelier::src::foundation::concurrency {
         entry->value = self->createValueCallback(self->hostContext);
         entry->isThreadExited = false;
 
-        primitive::Mutex_lock(&lifetimeLock);
+        sync::lock::BlockingLock_lock(&lifetimeLock);
 
         if (!self->isValid) {
-            primitive::Mutex_unlock(&lifetimeLock);
+            sync::lock::BlockingLock_unlock(&lifetimeLock);
 
             if (self->destroyValueCallback && entry->value) {
                 self->destroyValueCallback(entry->value, self->hostContext);
@@ -544,7 +544,7 @@ namespace Catelier::src::foundation::concurrency {
             return nullptr;
         }
 
-        primitive::Mutex_lock(&self->lock);
+        sync::lock::BlockingLock_lock(&self->lock);
 
         entry->nextInBucket = registry->buckets[finalBucketIndex];
         registry->buckets[finalBucketIndex] = entry;
@@ -554,9 +554,9 @@ namespace Catelier::src::foundation::concurrency {
         self->headEntry = entry;
         self->entryCount++;
 
-        primitive::Mutex_unlock(&self->lock);
+        sync::lock::BlockingLock_unlock(&self->lock);
 
-        primitive::Mutex_unlock(&lifetimeLock);
+        sync::lock::BlockingLock_unlock(&lifetimeLock);
 
         registry->cachedOwner = self;
         registry->cachedGeneration = self->generation;
@@ -570,16 +570,16 @@ namespace Catelier::src::foundation::concurrency {
             return;
         }
 
-        primitive::Mutex_lock(&lifetimeLock);
+        sync::lock::BlockingLock_lock(&lifetimeLock);
 
-        primitive::Mutex_lock(&((ThreadLocalTable*) self)->lock);
+        sync::lock::BlockingLock_lock(&((ThreadLocalTable*) self)->lock);
 
         for (ThreadLocalTableEntry* entry = self->headEntry; entry; entry = entry->nextInOwner) {
             actionCallback(entry->value, entry->isThreadExited, actionContext);
         }
 
-        primitive::Mutex_unlock(&((ThreadLocalTable*) self)->lock);
+        sync::lock::BlockingLock_unlock(&((ThreadLocalTable*) self)->lock);
 
-        primitive::Mutex_unlock(&lifetimeLock);
+        sync::lock::BlockingLock_unlock(&lifetimeLock);
     }
 }

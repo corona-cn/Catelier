@@ -22,7 +22,7 @@ namespace Catelier::src::foundation::sync {
             return (CONDITION_VARIABLE*) self->storage;
         }
 
-        auto asCriticalSection(const primitive::Mutex* mutex) -> CRITICAL_SECTION* {
+        auto asCriticalSection(const sync::lock::BlockingLock* mutex) -> CRITICAL_SECTION* {
             return (CRITICAL_SECTION*) mutex->storage;
         }
 
@@ -32,7 +32,7 @@ namespace Catelier::src::foundation::sync {
             return (pthread_cond_t*) self->storage;
         }
 
-        auto asPthreadMutex(const primitive::Mutex* mutex) -> pthread_mutex_t* {
+        auto asPthreadBlockingLock(const sync::lock::BlockingLock* mutex) -> pthread_mutex_t* {
             return (pthread_mutex_t*) mutex->storage;
         }
 
@@ -136,7 +136,7 @@ namespace Catelier::src::foundation::sync {
         #endif
     }
 
-    auto ConditionalVar_wait(ConditionalVar* self, primitive::Mutex* mutex) -> bool {
+    auto ConditionalVar_wait(ConditionalVar* self, sync::lock::BlockingLock* mutex) -> bool {
         if (!self || !mutex) {
             return false;
         }
@@ -150,12 +150,12 @@ namespace Catelier::src::foundation::sync {
 
         #else
 
-        const int result = pthread_cond_wait(asNative(self), asPthreadMutex(mutex));
+        const int result = pthread_cond_wait(asNative(self), asPthreadBlockingLock(mutex));
         return result == 0;
 
         #endif
     }
-    auto ConditionalVar_timedWait(ConditionalVar* self, primitive::Mutex* mutex, const u64 timeoutMs) -> bool {
+    auto ConditionalVar_timedWait(ConditionalVar* self, sync::lock::BlockingLock* mutex, const u64 timeoutMs) -> bool {
         if (!self || !mutex) {
             return false;
         }
@@ -172,7 +172,7 @@ namespace Catelier::src::foundation::sync {
 
         struct timespec deadline;
         computeDeadline(timeoutMs, &deadline);
-        const int result = pthread_cond_timedwait(asNative(self), asPthreadMutex(mutex), &deadline);
+        const int result = pthread_cond_timedwait(asNative(self), asPthreadBlockingLock(mutex), &deadline);
         return result == 0;
 
         #endif

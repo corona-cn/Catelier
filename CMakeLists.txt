@@ -47,86 +47,86 @@ add_executable(Catelier
 	test/catelier/Main.cpp
 	src/catelier/CommonMacro.hpp
 	src/catelier/CommonPrimitives.hpp
-	src/catelier/foundation/ArrayList.hpp
-	src/catelier/foundation/ArrayList.cpp
-	include/catelier/foundation/ArrayList.hpp
-	src/catelier/foundation/OpenHashMap.hpp
-	src/catelier/foundation/OpenHashMap.cpp
-	include/catelier/foundation/OpenHashMap.hpp
+	src/catelier/foundation/structure/linear/sequence/ArrayList.hpp
+	src/catelier/foundation/structure/linear/sequence/ArrayList.cpp
+	include/catelier/foundation/structure/linear/sequence/ArrayList.hpp
+	src/catelier/foundation/structure/associative/map/OpenHashMap.hpp
+	src/catelier/foundation/structure/associative/map/OpenHashMap.cpp
+	include/catelier/foundation/structure/associative/map/OpenHashMap.hpp
 	src/catelier/util/HashUtils.hpp
 	src/catelier/util/HashUtils.cpp
-	src/catelier/foundation/SinglyLinkedList.hpp
-	src/catelier/foundation/SinglyLinkedList.cpp
-	include/catelier/foundation/SinglyLinkedList.hpp
-	src/catelier/foundation/DoublyLinkedList.hpp
-	src/catelier/foundation/DoublyLinkedList.cpp
-	include/catelier/foundation/DoublyLinkedList.hpp
-	src/catelier/foundation/ChainHashMap.hpp
-	src/catelier/foundation/ChainHashMap.cpp
-	include/catelier/foundation/ChainHashMap.hpp
-	src/catelier/foundation/BitArray.hpp
-	src/catelier/foundation/BitArray.cpp
-	include/catelier/foundation/BitArray.hpp
-	src/catelier/foundation/BitSet.hpp
-	src/catelier/foundation/BitSet.cpp
-	include/catelier/foundation/BitSet.hpp
-	src/catelier/foundation/RingBuffer.hpp
-	src/catelier/foundation/RingBuffer.cpp
-	include/catelier/foundation/RingBuffer.hpp
-	src/catelier/foundation/Stack.hpp
-	src/catelier/foundation/Stack.cpp
-	include/catelier/foundation/Stack.hpp
-	src/catelier/foundation/BoundedQueue.hpp
-	src/catelier/foundation/BoundedQueue.cpp
-	include/catelier/foundation/BoundedQueue.hpp
-	src/catelier/foundation/BoundedDeque.hpp
-	src/catelier/foundation/BoundedDeque.cpp
-	include/catelier/foundation/BoundedDeque.hpp
-	src/catelier/foundation/UnboundedQueue.hpp
-	src/catelier/foundation/UnboundedQueue.cpp
-	include/catelier/foundation/UnboundedQueue.hpp
-	src/catelier/foundation/UnboundedDeque.hpp
-	src/catelier/foundation/UnboundedDeque.cpp
-	include/catelier/foundation/UnboundedDeque.hpp
-	src/catelier/foundation/BinaryHeap.hpp
-	src/catelier/foundation/BinaryHeap.cpp
-	include/catelier/foundation/BinaryHeap.hpp
-	src/catelier/foundation/BinarySearchTree.hpp
-	src/catelier/foundation/BinarySearchTree.cpp
-	include/catelier/foundation/BinarySearchTree.hpp
-	src/catelier/foundation/AVLTree.hpp
-	src/catelier/foundation/AVLTree.cpp
-	include/catelier/foundation/AVLTree.hpp
-	src/catelier/foundation/BinaryTree.hpp
-	src/catelier/foundation/BinaryTree.cpp
-	include/catelier/foundation/BinaryTree.hpp
-	src/catelier/foundation/HuffmanTree.hpp
-	src/catelier/foundation/HuffmanTree.cpp
-	include/catelier/foundation/HuffmanTree.hpp
-	src/catelier/foundation/UnionFind.hpp
-	src/catelier/foundation/UnionFind.cpp
-	include/catelier/foundation/UnionFind.hpp
-	src/catelier/foundation/AdjacencyMatrix.hpp
-	src/catelier/foundation/AdjacencyMatrix.cpp
-	include/catelier/foundation/AdjacencyMatrix.hpp
-	src/catelier/foundation/AdjacencyList.hpp
-	src/catelier/foundation/AdjacencyList.cpp
-	include/catelier/foundation/AdjacencyList.hpp
-	src/catelier/foundation/EdgeList.hpp
-	src/catelier/foundation/EdgeList.cpp
-	include/catelier/foundation/EdgeList.hpp
-	src/catelier/foundation/HeapString.hpp
-	src/catelier/foundation/HeapString.cpp
-	include/catelier/foundation/HeapString.hpp
-	src/catelier/foundation/CircularLinkedList.hpp
-	src/catelier/foundation/CircularLinkedList.cpp
-	include/catelier/foundation/CircularLinkedList.hpp
-	src/catelier/foundation/primitive/Mutex.hpp
-	src/catelier/foundation/primitive/Mutex.cpp
-	include/catelier/foundation/primitive/Mutex.hpp
-	src/catelier/foundation/primitive/OnceFlag.hpp
-	src/catelier/foundation/primitive/OnceFlag.cpp
-	include/catelier/foundation/primitive/OnceFlag.hpp
+	src/catelier/foundation/structure/linear/sequence/SinglyLinkedList.hpp
+	src/catelier/foundation/structure/linear/sequence/SinglyLinkedList.cpp
+	include/catelier/foundation/structure/linear/sequence/SinglyLinkedList.hpp
+	src/catelier/foundation/structure/linear/sequence/DoublyLinkedList.hpp
+	src/catelier/foundation/structure/linear/sequence/DoublyLinkedList.cpp
+	include/catelier/foundation/structure/linear/sequence/DoublyLinkedList.hpp
+	src/catelier/foundation/structure/associative/map/ChainHashMap.hpp
+	src/catelier/foundation/structure/associative/map/ChainHashMap.cpp
+	include/catelier/foundation/structure/associative/map/ChainHashMap.hpp
+	src/catelier/foundation/structure/linear/sequence/BitArray.hpp
+	src/catelier/foundation/structure/linear/sequence/BitArray.cpp
+	include/catelier/foundation/structure/linear/sequence/BitArray.hpp
+	src/catelier/foundation/structure/linear/sequence/BitSet.hpp
+	src/catelier/foundation/structure/linear/sequence/BitSet.cpp
+	include/catelier/foundation/structure/linear/sequence/BitSet.hpp
+	src/catelier/foundation/structure/linear/queue/RingBuffer.hpp
+	src/catelier/foundation/structure/linear/queue/RingBuffer.cpp
+	include/catelier/foundation/structure/linear/queue/RingBuffer.hpp
+	src/catelier/foundation/structure/linear/stack/Stack.hpp
+	src/catelier/foundation/structure/linear/stack/Stack.cpp
+	include/catelier/foundation/structure/linear/stack/Stack.hpp
+	src/catelier/foundation/structure/linear/queue/BoundedQueue.hpp
+	src/catelier/foundation/structure/linear/queue/BoundedQueue.cpp
+	include/catelier/foundation/structure/linear/queue/BoundedQueue.hpp
+	src/catelier/foundation/structure/linear/queue/BoundedDeque.hpp
+	src/catelier/foundation/structure/linear/queue/BoundedDeque.cpp
+	include/catelier/foundation/structure/linear/queue/BoundedDeque.hpp
+	src/catelier/foundation/structure/linear/queue/UnboundedQueue.hpp
+	src/catelier/foundation/structure/linear/queue/UnboundedQueue.cpp
+	include/catelier/foundation/structure/linear/queue/UnboundedQueue.hpp
+	src/catelier/foundation/structure/linear/queue/UnboundedDeque.hpp
+	src/catelier/foundation/structure/linear/queue/UnboundedDeque.cpp
+	include/catelier/foundation/structure/linear/queue/UnboundedDeque.hpp
+	src/catelier/foundation/structure/linear/priority/BinaryHeap.hpp
+	src/catelier/foundation/structure/linear/priority/BinaryHeap.cpp
+	include/catelier/foundation/structure/linear/priority/BinaryHeap.hpp
+	src/catelier/foundation/structure/tree/binary/BinarySearchTree.hpp
+	src/catelier/foundation/structure/tree/binary/BinarySearchTree.cpp
+	include/catelier/foundation/structure/tree/binary/BinarySearchTree.hpp
+	src/catelier/foundation/structure/tree/binary/AVLTree.hpp
+	src/catelier/foundation/structure/tree/binary/AVLTree.cpp
+	include/catelier/foundation/structure/tree/binary/AVLTree.hpp
+	src/catelier/foundation/structure/tree/binary/BinaryTree.hpp
+	src/catelier/foundation/structure/tree/binary/BinaryTree.cpp
+	include/catelier/foundation/structure/tree/binary/BinaryTree.hpp
+	src/catelier/foundation/structure/tree/binary/HuffmanTree.hpp
+	src/catelier/foundation/structure/tree/binary/HuffmanTree.cpp
+	include/catelier/foundation/structure/tree/binary/HuffmanTree.hpp
+	src/catelier/foundation/structure/tree/disjoint/UnionFind.hpp
+	src/catelier/foundation/structure/tree/disjoint/UnionFind.cpp
+	include/catelier/foundation/structure/tree/disjoint/UnionFind.hpp
+	src/catelier/foundation/structure/graph/AdjacencyMatrix.hpp
+	src/catelier/foundation/structure/graph/AdjacencyMatrix.cpp
+	include/catelier/foundation/structure/graph/AdjacencyMatrix.hpp
+	src/catelier/foundation/structure/graph/AdjacencyList.hpp
+	src/catelier/foundation/structure/graph/AdjacencyList.cpp
+	include/catelier/foundation/structure/graph/AdjacencyList.hpp
+	src/catelier/foundation/structure/graph/EdgeList.hpp
+	src/catelier/foundation/structure/graph/EdgeList.cpp
+	include/catelier/foundation/structure/graph/EdgeList.hpp
+	src/catelier/foundation/structure/linear/sequence/HeapString.hpp
+	src/catelier/foundation/structure/linear/sequence/HeapString.cpp
+	include/catelier/foundation/structure/linear/sequence/HeapString.hpp
+	src/catelier/foundation/structure/linear/sequence/CircularLinkedList.hpp
+	src/catelier/foundation/structure/linear/sequence/CircularLinkedList.cpp
+	include/catelier/foundation/structure/linear/sequence/CircularLinkedList.hpp
+	src/catelier/foundation/sync/lock/BlockingLock.hpp
+	src/catelier/foundation/sync/lock/BlockingLock.cpp
+	include/catelier/foundation/sync/lock/BlockingLock.hpp
+	src/catelier/foundation/sync/OnceFlag.hpp
+	src/catelier/foundation/sync/OnceFlag.cpp
+	include/catelier/foundation/sync/OnceFlag.hpp
 	src/catelier/foundation/primitive/Atomic.hpp
 	src/catelier/foundation/primitive/Atomic.cpp
 	include/catelier/foundation/primitive/Atomic.hpp
@@ -139,12 +139,12 @@ add_executable(Catelier
 	src/catelier/foundation/sync/ConflatedSignal.hpp
 	src/catelier/foundation/sync/ConflatedSignal.cpp
 	include/catelier/foundation/sync/ConflatedSignal.hpp
-	src/catelier/foundation/concurrent/ConcurrentUnboundedQueue.hpp
-	src/catelier/foundation/concurrent/ConcurrentUnboundedQueue.cpp
-	include/catelier/foundation/concurrent/ConcurrentUnboundedQueue.hpp
-	src/catelier/foundation/concurrent/ConcurrentChainHashMap.hpp
-	src/catelier/foundation/concurrent/ConcurrentChainHashMap.cpp
-	include/catelier/foundation/concurrent/ConcurrentChainHashMap.hpp
+	src/catelier/foundation/structure/linear/queue/concurrent/ConcurrentUnboundedQueue.hpp
+	src/catelier/foundation/structure/linear/queue/concurrent/ConcurrentUnboundedQueue.cpp
+	include/catelier/foundation/structure/linear/queue/concurrent/ConcurrentUnboundedQueue.hpp
+	src/catelier/foundation/structure/associative/map/concurrent/ConcurrentChainHashMap.hpp
+	src/catelier/foundation/structure/associative/map/concurrent/ConcurrentChainHashMap.cpp
+	include/catelier/foundation/structure/associative/map/concurrent/ConcurrentChainHashMap.hpp
 	src/catelier/architecture/imp/IMPList.hpp
 	src/catelier/architecture/imp/IMPList.cpp
 	include/catelier/architecture/imp/IMPList.hpp
@@ -155,9 +155,9 @@ add_executable(Catelier
 	"src/catelier/foundation/concurrency/ThreadLocalTable.hpp"
 	include/catelier/foundation/concurrency/ThreadLocalTable.hpp
 	src/catelier/foundation/concurrency/ThreadLocalTable.cpp
-	src/catelier/foundation/primitive/SpinMutex.hpp
-	src/catelier/foundation/primitive/SpinMutex.cpp
-	include/catelier/foundation/primitive/SpinMutex.hpp
+	src/catelier/foundation/sync/lock/SpinLock.hpp
+	src/catelier/foundation/sync/lock/SpinLock.cpp
+	include/catelier/foundation/sync/lock/SpinLock.hpp
 )
 
 

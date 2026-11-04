@@ -39,12 +39,12 @@ namespace Catelier::src::foundation::sync {
         primitive::AtomicBool_store(&self->closed, false, primitive::RELAXED);
         primitive::Atomic64_store(&self->waiterCount, 0, primitive::RELAXED);
 
-        if (!primitive::Mutex_init(&self->mutex)) {
+        if (!sync::lock::BlockingLock_init(&self->mutex)) {
             return false;
         }
 
         if (!ConditionalVar_init(&self->condition)) {
-            primitive::Mutex_destroy(&self->mutex);
+            sync::lock::BlockingLock_destroy(&self->mutex);
             return false;
         }
 
@@ -62,12 +62,12 @@ namespace Catelier::src::foundation::sync {
             return false;
         }
 
-        primitive::Mutex_lock(&self->mutex);
+        sync::lock::BlockingLock_lock(&self->mutex);
 
         primitive::AtomicBool_store(&self->closed, true, primitive::RELEASE);
         ConditionalVar_broadcast(&self->condition);
 
-        primitive::Mutex_unlock(&self->mutex);
+        sync::lock::BlockingLock_unlock(&self->mutex);
 
         while (primitive::Atomic64_load(&self->waiterCount, primitive::SEQUENTIAL_CONSISTENT) > 0) {
             primitive::Thread_yield();
@@ -75,7 +75,7 @@ namespace Catelier::src::foundation::sync {
 
         ConditionalVar_destroy(&self->condition);
 
-        primitive::Mutex_destroy(&self->mutex);
+        sync::lock::BlockingLock_destroy(&self->mutex);
 
         return true;
     }
@@ -91,14 +91,14 @@ namespace Catelier::src::foundation::sync {
             return;
         }
 
-        primitive::Mutex_lock(&self->mutex);
+        sync::lock::BlockingLock_lock(&self->mutex);
 
         if (!primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE) && !primitive::AtomicBool_load(&self->pending, primitive::ACQUIRE)) {
             primitive::AtomicBool_store(&self->pending, true, primitive::RELEASE);
             ConditionalVar_signal(&self->condition);
         }
 
-        primitive::Mutex_unlock(&self->mutex);
+        sync::lock::BlockingLock_unlock(&self->mutex);
 
         primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
     }
@@ -113,10 +113,10 @@ namespace Catelier::src::foundation::sync {
             return;
         }
 
-        primitive::Mutex_lock(&self->mutex);
+        sync::lock::BlockingLock_lock(&self->mutex);
 
         if (primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
-            primitive::Mutex_unlock(&self->mutex);
+            sync::lock::BlockingLock_unlock(&self->mutex);
             primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
             return;
         }
@@ -129,7 +129,7 @@ namespace Catelier::src::foundation::sync {
             primitive::AtomicBool_store(&self->pending, false, primitive::RELEASE);
         }
 
-        primitive::Mutex_unlock(&self->mutex);
+        sync::lock::BlockingLock_unlock(&self->mutex);
 
         primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
     }
@@ -144,10 +144,10 @@ namespace Catelier::src::foundation::sync {
             return false;
         }
 
-        primitive::Mutex_lock(&self->mutex);
+        sync::lock::BlockingLock_lock(&self->mutex);
 
         if (primitive::AtomicBool_load(&self->closed, primitive::ACQUIRE)) {
-            primitive::Mutex_unlock(&self->mutex);
+            sync::lock::BlockingLock_unlock(&self->mutex);
             primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
             return false;
         }
@@ -171,7 +171,7 @@ namespace Catelier::src::foundation::sync {
             primitive::AtomicBool_store(&self->pending, false, primitive::RELEASE);
         }
 
-        primitive::Mutex_unlock(&self->mutex);
+        sync::lock::BlockingLock_unlock(&self->mutex);
 
         primitive::Atomic64_fetchSub(&self->waiterCount, 1, primitive::SEQUENTIAL_CONSISTENT);
 

@@ -1,6 +1,6 @@
 #pragma once
 #include "../../../../src/catelier/foundation/sync/ConditionalVar.hpp"
-#include "../primitive/Mutex.hpp"
+#include "lock/BlockingLock.hpp"
 
 namespace Catelier::include::foundation::sync {
     class ConditionalVar {
@@ -45,10 +45,10 @@ namespace Catelier::include::foundation::sync {
                 return src::foundation::sync::ConditionalVar_broadcast(&this->handle);
             }
 
-            auto wait(primitive::Mutex& mutex) -> bool {
+            auto wait(sync::lock::BlockingLock& mutex) -> bool {
                 return ConditionalVar_wait(&this->handle, mutex.rawHandle());
             }
-            auto timedWait(primitive::Mutex& mutex, const u64 timeoutMs) -> bool {
+            auto timedWait(sync::lock::BlockingLock& mutex, const u64 timeoutMs) -> bool {
                 return src::foundation::sync::ConditionalVar_timedWait(&this->handle, mutex.rawHandle(), timeoutMs);
             }
 
