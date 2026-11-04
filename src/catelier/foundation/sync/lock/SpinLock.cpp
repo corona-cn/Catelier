@@ -14,7 +14,9 @@
 namespace Catelier::src::foundation::sync::lock {
     namespace {
         constexpr usize SPIN_PAUSE_LIMIT = 64;
+    }
 
+    namespace {
         auto cpuPause() -> void {
             #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 
@@ -28,17 +30,18 @@ namespace Catelier::src::foundation::sync::lock {
         }
     }
 
-    auto SpinLock_init(SpinLock* self) -> bool {
+    auto SpinLock_init(SpinLock* const self, const SpinLock_Policy inPolicy) -> bool {
         if (!self) {
             return false;
         }
 
         self->state = 0;
+        self->policy = inPolicy;
         self->valid = true;
 
         return true;
     }
-    auto SpinLock_destroy(SpinLock* self) -> bool {
+    auto SpinLock_destroy(SpinLock* const self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
@@ -54,29 +57,53 @@ namespace Catelier::src::foundation::sync::lock {
         return true;
     }
 
-    auto SpinLock_lock(SpinLock* self) -> bool {
+    auto SpinLock_lock(SpinLock* const self) -> bool {
         if (!self) {
             return false;
         }
 
         assert(self->valid);
 
-        usize spinCount = 0;
-        while (true) {
-            u32 expected = 0;
-            if (primitive::Atomic32_compareExchange(&self->state, &expected, 1, primitive::ACQUIRE)) {
-                return true;
-            }
+        switch (self->policy) {
+            case SpinLock_Policy::TAS: {
+                usize spinCount = 0;
+                while (true) {
+                    u32 expected = 0;
+                    if (primitive::Atomic32_compareExchange(&self->state, &expected, 1, primitive::ACQUIRE)) {
+                        return true;
+                    }
 
-            if (spinCount < SPIN_PAUSE_LIMIT) {
-                cpuPause();
-                spinCount++;
-            } else {
-                primitive::Thread_yield();
+                    if (spinCount < SPIN_PAUSE_LIMIT) {
+                        cpuPause();
+                        spinCount++;
+                    } else {
+                        primitive::Thread_yield();
+                    }
+                }
+            }
+            case SpinLock_Policy::TTAS: {
+                usize spinCount = 0;
+                while (true) {
+                    if (primitive::Atomic32_load(&self->state, primitive::RELAXED) == 0) {
+                        u32 expected = 0;
+                        if (primitive::Atomic32_compareExchange(&self->state, &expected, 1, primitive::ACQUIRE)) {
+                            return true;
+                        }
+                    }
+
+                    if (spinCount < SPIN_PAUSE_LIMIT) {
+                        cpuPause();
+                        spinCount++;
+                    } else {
+                        primitive::Thread_yield();
+                    }
+                }
             }
         }
+
+        return false;
     }
-    auto SpinLock_unlock(SpinLock* self) -> bool {
+    auto SpinLock_unlock(SpinLock* const self) -> bool {
         if (!self) {
             return false;
         }
@@ -87,7 +114,7 @@ namespace Catelier::src::foundation::sync::lock {
 
         return true;
     }
-    auto SpinLock_tryLock(SpinLock* self) -> bool {
+    auto SpinLock_tryLock(SpinLock* const self) -> bool {
         if (!self) {
             return false;
         }

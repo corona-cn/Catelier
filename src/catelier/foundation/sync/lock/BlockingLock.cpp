@@ -16,7 +16,8 @@ namespace Catelier::src::foundation::sync::lock {
     namespace {
         #ifdef _WIN32
 
-        constexpr DWORD MUTEX_SPIN_COUNT = 4000;
+        constexpr DWORD BLOCKING_LOCK_PLAIN_SPIN_COUNT = 0;
+        constexpr DWORD BLOCKING_LOCK_ADAPTIVE_SPIN_COUNT = 4000;
 
         #endif
     }
@@ -37,18 +38,20 @@ namespace Catelier::src::foundation::sync::lock {
         #endif
     }
 
-    auto BlockingLock_init(BlockingLock* self) -> bool {
+    auto BlockingLock_init(BlockingLock* const self, const BlockingLock_Policy inPolicy) -> bool {
         if (!self) {
             return false;
         }
 
         memset(self->storage, 0, sizeof(self->storage));
 
+        self->policy = inPolicy;
         self->valid = false;
 
         #ifdef _WIN32
 
-        if (!InitializeCriticalSectionAndSpinCount(asNative(self), MUTEX_SPIN_COUNT)) {
+        const DWORD spinCount = inPolicy == BlockingLock_Policy::ADAPTIVE ? BLOCKING_LOCK_ADAPTIVE_SPIN_COUNT : BLOCKING_LOCK_PLAIN_SPIN_COUNT;
+        if (!InitializeCriticalSectionAndSpinCount(asNative(self), spinCount)) {
             return false;
         }
 
@@ -61,7 +64,11 @@ namespace Catelier::src::foundation::sync::lock {
 
         #ifdef PTHREAD_MUTEX_ADAPTIVE_NP
 
-        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ADAPTIVE_NP);
+        if (inPolicy == BlockingLock_Policy::ADAPTIVE) {
+            pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ADAPTIVE_NP);
+        } else {
+            pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_NORMAL);
+        }
 
         #else
 
@@ -82,7 +89,7 @@ namespace Catelier::src::foundation::sync::lock {
 
         return true;
     }
-    auto BlockingLock_destroy(BlockingLock* self) -> bool {
+    auto BlockingLock_destroy(BlockingLock* const self) -> bool {
         if (!self || !self->valid) {
             return false;
         }
@@ -111,7 +118,7 @@ namespace Catelier::src::foundation::sync::lock {
         return true;
     }
 
-    auto BlockingLock_lock(BlockingLock* self) -> bool {
+    auto BlockingLock_lock(BlockingLock* const self) -> bool {
         if (!self) {
             return false;
         }
@@ -131,7 +138,7 @@ namespace Catelier::src::foundation::sync::lock {
 
         #endif
     }
-    auto BlockingLock_unlock(BlockingLock* self) -> bool {
+    auto BlockingLock_unlock(BlockingLock* const self) -> bool {
         if (!self) {
             return false;
         }
@@ -151,7 +158,7 @@ namespace Catelier::src::foundation::sync::lock {
 
         #endif
     }
-    auto BlockingLock_tryLock(BlockingLock* self) -> bool {
+    auto BlockingLock_tryLock(BlockingLock* const self) -> bool {
         if (!self) {
             return false;
         }
@@ -165,11 +172,7 @@ namespace Catelier::src::foundation::sync::lock {
         #else
 
         const int ret = pthread_mutex_trylock(asNative(self));
-        if (ret == 0) {
-            return true;
-        }
-
-        return false;
+        return ret == 0;
 
         #endif
     }

@@ -188,7 +188,7 @@ namespace Catelier::src::foundation::concurrency {
         }
 
         auto initGlobalState() -> void {
-            sync::lock::BlockingLock_init(&lifetimeLock);
+            sync::lock::BlockingLock_init(&lifetimeLock, sync::lock::BlockingLock_Policy::PLAIN);
 
             #ifdef _WIN32
 
@@ -275,7 +275,7 @@ namespace Catelier::src::foundation::concurrency {
 
         self->generation = primitive::Atomic64_fetchAdd(&generationCounter, 1, primitive::MemoryOrder::RELAXED) + 1;
 
-        if (!sync::lock::BlockingLock_init(&self->lock)) {
+        if (!sync::lock::BlockingLock_init(&self->lock, sync::lock::BlockingLock_Policy::PLAIN)) {
             return false;
         }
 
@@ -339,7 +339,7 @@ namespace Catelier::src::foundation::concurrency {
 
         self->generation = primitive::Atomic64_fetchAdd(&generationCounter, 1, primitive::MemoryOrder::RELAXED) + 1;
 
-        if (!sync::lock::BlockingLock_init(&self->lock)) {
+        if (!sync::lock::BlockingLock_init(&self->lock, sync::lock::BlockingLock_Policy::PLAIN)) {
             return false;
         }
 
@@ -352,7 +352,7 @@ namespace Catelier::src::foundation::concurrency {
             return false;
         }
 
-        if (!sync::lock::BlockingLock_init(&self->lock)) {
+        if (!sync::lock::BlockingLock_init(&self->lock, sync::lock::BlockingLock_Policy::PLAIN)) {
             return false;
         }
 

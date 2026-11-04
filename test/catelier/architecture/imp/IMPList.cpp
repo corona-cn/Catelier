@@ -2402,66 +2402,118 @@ namespace Catelier::test::architecture::imp {
         }
 
         auto testBenchHighConcurrencyReadWrite() -> void {
-            LOG("--- [性能] 高并发读写吞吐（分线程数与读写比例，大基数压测） ---");
+            LOG("--- [性能] 高并发读写吞吐（理想扩展 + 生产环境双模式，绑核到物理核） ---");
+
             constexpr int threadConfigs[] = { 1, 2, 4, 8 };
             struct ReadWriteRatio { int readers; int writers; };
-            const ReadWriteRatio ratios[] = { { 1, 1 }, { 1, 4 }, { 4, 1 }, { 1, 0 }, { 0, 1 } };
+            constexpr ReadWriteRatio ratios[] = { { 1, 1 }, { 1, 4 }, { 4, 1 }, { 1, 0 }, { 0, 1 } };
 
-            // 【关键修改】将操作数放大到 100 万次，彻底摊薄线程创建和同步的固定开销
-            constexpr u32 opsPerThread = 1000000;
-            constexpr u32 kReadBatchSize = 1000;
+            constexpr u32 kListSize = 10000;
+            constexpr u64 kReadElementAccessesPerThread = 100000000;
+            constexpr u32 kWriteOpsPerThread = 1000000;
 
-            for (int baseThreads : threadConfigs) {
-                for (const auto& ratio : ratios) {
-                    int rThreads = ratio.readers * baseThreads;
-                    int wThreads = ratio.writers * baseThreads;
-                    int totalThreads = rThreads + wThreads;
-                    if (totalThreads == 0) continue;
+            int physicalCoreCount = 1;
 
-                    auto list = IMPList<int>(1024, 1024);
-                    list.configureCompaction(false, 20, 10000);
-                    for (int i = 0; i < 10000; ++i) list.add(i);
-                    list.tryMerging();
-                    list.awaitMerging();
+            #ifdef _WIN32
+            physicalCoreCount = (int) (std::thread::hardware_concurrency() / 2);
+            if (physicalCoreCount <= 0) {
+                physicalCoreCount = 1;
+            }
+            #endif
 
-                    // 计算当前配置下的真实总操作数
-                    u64 totalOps = (u64) rThreads * opsPerThread * kReadBatchSize + (u64) wThreads * opsPerThread;
+            LOG("物理核数（推定）= ", physicalCoreCount);
 
-                    std::string benchName = "[并发] " + std::to_string(totalThreads) + " 线程 (" + std::to_string(rThreads) + " 读 " + std::to_string(wThreads) + " 写)";
-                    globalBench.batch(totalOps).run(benchName.c_str(), [&] {
-                        std::vector<std::thread> threads;
-                        threads.reserve(totalThreads);
+            struct Mode {
+                const char* name;
+                bool maintenanceMerging;
+            };
+            constexpr Mode modes[] = {
+                { "理想", false },
+                { "生产", true },
+            };
 
-                        // 读线程：每次获取快照后，连续遍历 1000 个元素
-                        for (int r = 0; r < rThreads; ++r) {
-                            threads.emplace_back([&list, opsPerThread, kReadBatchSize] {
-                                int accum = 0;
-                                for (u32 i = 0; i < opsPerThread; ++i) {
-                                    usize idx = 0;
-                                    for (const auto& v : list) {
-                                        accum += v;
-                                        if (++idx >= kReadBatchSize) break;
+            for (const auto& mode : modes) {
+                for (int baseThreads : threadConfigs) {
+                    for (const auto& ratio : ratios) {
+                        int rThreads = ratio.readers * baseThreads;
+                        int wThreads = ratio.writers * baseThreads;
+                        int totalThreads = rThreads + wThreads;
+                        if (totalThreads == 0) continue;
+
+                        u64 totalReadOps = (u64) rThreads * kReadElementAccessesPerThread;
+                        u64 totalWriteOps = (u64) wThreads * kWriteOpsPerThread;
+                        u64 totalOps = totalReadOps + totalWriteOps;
+
+                        std::string benchName =
+                            "[" + std::string(mode.name) + "] " +
+                            std::to_string(totalThreads) + " 线程 (" +
+                            std::to_string(rThreads) + " 读 " + std::to_string(wThreads) + " 写)";
+
+                        globalBench.batch(totalOps).run(benchName.c_str(), [&] {
+                            auto list = IMPList<int>(1024, 1024);
+                            list.configureMaintenanceMerging(mode.maintenanceMerging);
+                            list.configureCompaction(false, 20, 10000);
+
+                            for (u32 i = 0; i < kListSize; ++i) {
+                                list.add((int) i);
+                            }
+                            list.tryMerging();
+                            list.awaitMerging();
+
+                            std::vector<std::thread> threads;
+                            threads.reserve(totalThreads);
+
+                            int threadIndex = 0;
+
+                            for (int r = 0; r < rThreads; ++r) {
+                                const int boundCore = threadIndex % physicalCoreCount;
+                                ++threadIndex;
+
+                                threads.emplace_back([&list, boundCore, physicalCoreCount, kReadElementAccessesPerThread] {
+                                    #ifdef _WIN32
+                                    const DWORD_PTR mask = (DWORD_PTR) 1 << (boundCore * 2);
+                                    SetThreadAffinityMask(GetCurrentThread(), mask);
+                                    #else
+                                    (void) boundCore;
+                                    (void) physicalCoreCount;
+                                    #endif
+
+                                    int accum = 0;
+                                    u64 accessed = 0;
+                                    while (accessed < kReadElementAccessesPerThread) {
+                                        for (const auto& v : list) {
+                                            accum += v;
+                                            if (++accessed >= kReadElementAccessesPerThread) break;
+                                        }
                                     }
-                                }
-                                ankerl::nanobench::doNotOptimizeAway(accum);
-                            });
-                        }
+                                    ankerl::nanobench::doNotOptimizeAway(accum);
+                                });
+                            }
 
-                        // 写线程：疯狂追加
-                        for (int w = 0; w < wThreads; ++w) {
-                            threads.emplace_back([&list, w, opsPerThread]() {
-                                for (u32 i = 0; i < opsPerThread; ++i) {
-                                    list.add((int) (w * opsPerThread + i));
-                                }
-                            });
-                        }
+                            for (int w = 0; w < wThreads; ++w) {
+                                const int boundCore = threadIndex % physicalCoreCount;
+                                ++threadIndex;
 
-                        for (auto& t : threads) {
-                            t.join();
-                        }
-                        list.tryMerging();
-                        list.awaitMerging();
-                    });
+                                threads.emplace_back([&list, w, boundCore, physicalCoreCount, kWriteOpsPerThread, kListSize]() {
+                                    #ifdef _WIN32
+                                    const DWORD_PTR mask = (DWORD_PTR) 1 << (boundCore * 2);
+                                    SetThreadAffinityMask(GetCurrentThread(), mask);
+                                    #else
+                                    (void) boundCore;
+                                    (void) physicalCoreCount;
+                                    #endif
+
+                                    for (u32 i = 0; i < kWriteOpsPerThread; ++i) {
+                                        list.add((int) (w * kWriteOpsPerThread + i + kListSize));
+                                    }
+                                });
+                            }
+
+                            for (auto& t : threads) {
+                                t.join();
+                            }
+                        });
+                    }
                 }
             }
         }

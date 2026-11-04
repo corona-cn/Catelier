@@ -27,7 +27,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
     } ConcurrentChainHashMapBucketArray;
 
     typedef struct ConcurrentChainHashMapSegment {
-        sync::lock::BlockingLock mutex;
+        sync::lock::BlockingLock lock;
         ConcurrentChainHashMapBucketArray* bucketArray;
         ConcurrentChainHashMapBucketArray* history[HISTORY_SIZE];
         usize historyCount;
@@ -111,7 +111,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
             segment->historyCount = 0;
 
             // 初始化段互斥锁
-            if (!sync::lock::BlockingLock_init(&segment->mutex)) {
+            if (!sync::lock::BlockingLock_init(&segment->lock, sync::lock::BlockingLock_Policy::PLAIN)) {
                 for (usize j = 0; j < i; ++j) {
                     auto* const prevSegment = &self->segments[j];
                     auto* const prevBucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &prevSegment->bucketArray, primitive::RELAXED);
@@ -119,7 +119,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                     free(prevBucketArray->buckets);
                     free(prevBucketArray);
 
-                    sync::lock::BlockingLock_destroy(&prevSegment->mutex);
+                    sync::lock::BlockingLock_destroy(&prevSegment->lock);
                 }
 
                 free(self->segments);
@@ -133,7 +133,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
             // 分配桶数组结构体
             auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) malloc(sizeof(ConcurrentChainHashMapBucketArray));
             if (!bucketArray) {
-                sync::lock::BlockingLock_destroy(&segment->mutex);
+                sync::lock::BlockingLock_destroy(&segment->lock);
 
                 for (usize j = 0; j < i; ++j) {
                     auto* const prevSegment = &self->segments[j];
@@ -142,7 +142,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                     free(prevBucketArray->buckets);
                     free(prevBucketArray);
 
-                    sync::lock::BlockingLock_destroy(&prevSegment->mutex);
+                    sync::lock::BlockingLock_destroy(&prevSegment->lock);
                 }
 
                 free(self->segments);
@@ -156,7 +156,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
             if (!bucketArray->buckets) {
                 free(bucketArray);
 
-                sync::lock::BlockingLock_destroy(&segment->mutex);
+                sync::lock::BlockingLock_destroy(&segment->lock);
 
                 for (usize j = 0; j < i; ++j) {
                     auto* const prevSegment = &self->segments[j];
@@ -165,7 +165,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                     free(prevBucketArray->buckets);
                     free(prevBucketArray);
 
-                    sync::lock::BlockingLock_destroy(&prevSegment->mutex);
+                    sync::lock::BlockingLock_destroy(&prevSegment->lock);
                 }
 
                 free(self->segments);
@@ -229,7 +229,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                 free(segment->history[h]);
             }
 
-            sync::lock::BlockingLock_destroy(&segment->mutex);
+            sync::lock::BlockingLock_destroy(&segment->lock);
         }
 
         free(segments);
@@ -253,7 +253,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
             auto* const srcSegment = const_cast<ConcurrentChainHashMapSegment*>(&self->segments[i]);
             auto* const dstSegment = &newSelf->segments[i];
 
-            sync::lock::BlockingLock_lock(&srcSegment->mutex);
+            sync::lock::BlockingLock_lock(&srcSegment->lock);
 
             const auto* const srcArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &srcSegment->bucketArray, primitive::RELAXED);
             auto* const dstArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &dstSegment->bucketArray, primitive::RELAXED);
@@ -267,7 +267,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
                         auto* const newNode = (ConcurrentChainHashMapNode*) malloc(sizeof(ConcurrentChainHashMapNode));
                         if (!newNode) {
-                            sync::lock::BlockingLock_unlock(&srcSegment->mutex);
+                            sync::lock::BlockingLock_unlock(&srcSegment->lock);
                             ConcurrentChainHashMap_destruct(newSelf);
                             return nullptr;
                         }
@@ -275,7 +275,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                         newNode->key = malloc(self->keySize);
                         if (!newNode->key) {
                             free(newNode);
-                            sync::lock::BlockingLock_unlock(&srcSegment->mutex);
+                            sync::lock::BlockingLock_unlock(&srcSegment->lock);
                             ConcurrentChainHashMap_destruct(newSelf);
                             return nullptr;
                         }
@@ -285,7 +285,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                         if (!newNode->value) {
                             free(newNode->key);
                             free(newNode);
-                            sync::lock::BlockingLock_unlock(&srcSegment->mutex);
+                            sync::lock::BlockingLock_unlock(&srcSegment->lock);
                             ConcurrentChainHashMap_destruct(newSelf);
                             return nullptr;
                         }
@@ -301,7 +301,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                 }
             }
 
-            sync::lock::BlockingLock_unlock(&srcSegment->mutex);
+            sync::lock::BlockingLock_unlock(&srcSegment->lock);
         }
 
         return newSelf;
@@ -352,7 +352,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         const usize segmentIndex = (hashValue >> 32) & (self->segmentCount - 1);
         auto* const segment = &self->segments[segmentIndex];
 
-        sync::lock::BlockingLock_lock(&segment->mutex);
+        sync::lock::BlockingLock_lock(&segment->lock);
 
         auto* bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
@@ -366,12 +366,12 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
                 node->value = malloc(self->valueSize);
                 if (!node->value) {
-                    sync::lock::BlockingLock_unlock(&segment->mutex);
+                    sync::lock::BlockingLock_unlock(&segment->lock);
                     return false;
                 }
                 memcpy(node->value, inValue, self->valueSize);
 
-                sync::lock::BlockingLock_unlock(&segment->mutex);
+                sync::lock::BlockingLock_unlock(&segment->lock);
                 return true;
             }
             node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
@@ -379,14 +379,14 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
         auto* const newNode = (ConcurrentChainHashMapNode*) malloc(sizeof(ConcurrentChainHashMapNode));
         if (!newNode) {
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
             return false;
         }
 
         newNode->key = malloc(self->keySize);
         if (!newNode->key) {
             free(newNode);
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
             return false;
         }
         memcpy(newNode->key, inKey, self->keySize);
@@ -395,7 +395,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         if (!newNode->value) {
             free(newNode->key);
             free(newNode);
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
             return false;
         }
         memcpy(newNode->value, inValue, self->valueSize);
@@ -451,7 +451,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
             }
         }
 
-        sync::lock::BlockingLock_unlock(&segment->mutex);
+        sync::lock::BlockingLock_unlock(&segment->lock);
 
         return true;
     }
@@ -468,7 +468,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         const usize segmentIndex = (hashValue >> 32) & (self->segmentCount - 1);
         auto* const segment = &self->segments[segmentIndex];
 
-        sync::lock::BlockingLock_lock(&segment->mutex);
+        sync::lock::BlockingLock_lock(&segment->lock);
 
         auto* bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
@@ -480,13 +480,13 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
                 node->value = malloc(self->valueSize);
                 if (!node->value) {
-                    sync::lock::BlockingLock_unlock(&segment->mutex);
+                    sync::lock::BlockingLock_unlock(&segment->lock);
                     return false;
                 }
 
                 *newValueSlotOut = node->value;
 
-                sync::lock::BlockingLock_unlock(&segment->mutex);
+                sync::lock::BlockingLock_unlock(&segment->lock);
                 return true;
             }
             node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
@@ -494,14 +494,14 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
         auto* const newNode = (ConcurrentChainHashMapNode*) malloc(sizeof(ConcurrentChainHashMapNode));
         if (!newNode) {
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
             return false;
         }
 
         newNode->key = malloc(self->keySize);
         if (!newNode->key) {
             free(newNode);
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
             return false;
         }
 
@@ -509,7 +509,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         if (!newNode->value) {
             free(newNode->key);
             free(newNode);
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
             return false;
         }
 
@@ -522,7 +522,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         *keySlotOut = newNode->key;
         *newValueSlotOut = newNode->value;
 
-        sync::lock::BlockingLock_unlock(&segment->mutex);
+        sync::lock::BlockingLock_unlock(&segment->lock);
 
         return true;
     }
@@ -536,7 +536,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         const usize segmentIndex = (hashValue >> 32) & (self->segmentCount - 1);
         auto* const segment = &self->segments[segmentIndex];
 
-        sync::lock::BlockingLock_lock(&segment->mutex);
+        sync::lock::BlockingLock_lock(&segment->lock);
 
         auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
@@ -545,7 +545,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         while (node) {
             if (self->keyEquals(node->key, inKey)) {
                 if (!node->value) {
-                    sync::lock::BlockingLock_unlock(&segment->mutex);
+                    sync::lock::BlockingLock_unlock(&segment->lock);
                     return false;
                 }
 
@@ -554,13 +554,13 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
                 primitive::Atomic64_fetchSub(&segment->size, 1, primitive::RELAXED);
 
-                sync::lock::BlockingLock_unlock(&segment->mutex);
+                sync::lock::BlockingLock_unlock(&segment->lock);
                 return true;
             }
             node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
         }
 
-        sync::lock::BlockingLock_unlock(&segment->mutex);
+        sync::lock::BlockingLock_unlock(&segment->lock);
 
         return false;
     }
@@ -576,7 +576,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         const usize segmentIndex = (hashValue >> 32) & (self->segmentCount - 1);
         auto* const segment = &self->segments[segmentIndex];
 
-        sync::lock::BlockingLock_lock(&segment->mutex);
+        sync::lock::BlockingLock_lock(&segment->lock);
 
         auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
         const usize bucketIndex = hashValue & (bucketArray->bucketCount - 1);
@@ -585,13 +585,13 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         while (node) {
             if (self->keyEquals(node->key, inKey)) {
                 if (!node->value) {
-                    sync::lock::BlockingLock_unlock(&segment->mutex);
+                    sync::lock::BlockingLock_unlock(&segment->lock);
                     return false;
                 }
 
                 auto* const keyCopy = (void*) malloc(self->keySize);
                 if (!keyCopy) {
-                    sync::lock::BlockingLock_unlock(&segment->mutex);
+                    sync::lock::BlockingLock_unlock(&segment->lock);
                     return false;
                 }
                 memcpy(keyCopy, node->key, self->keySize);
@@ -603,13 +603,13 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
                 primitive::Atomic64_fetchSub(&segment->size, 1, primitive::RELAXED);
 
-                sync::lock::BlockingLock_unlock(&segment->mutex);
+                sync::lock::BlockingLock_unlock(&segment->lock);
                 return true;
             }
             node = (ConcurrentChainHashMapNode*) primitive::AtomicPtr_load((void* const*) &node->nextNode, primitive::RELAXED);
         }
 
-        sync::lock::BlockingLock_unlock(&segment->mutex);
+        sync::lock::BlockingLock_unlock(&segment->lock);
 
         return false;
     }
@@ -623,7 +623,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         for (usize i = 0; i < self->segmentCount; ++i) {
             auto* const segment = &self->segments[i];
 
-            sync::lock::BlockingLock_lock(&segment->mutex);
+            sync::lock::BlockingLock_lock(&segment->lock);
 
             auto* const bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
@@ -648,7 +648,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
 
             primitive::Atomic64_store(&segment->size, 0, primitive::RELAXED);
 
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
         }
 
         return removed;
@@ -695,7 +695,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         for (usize i = 0; i < self->segmentCount; ++i) {
             auto* const segment = const_cast<ConcurrentChainHashMapSegment*>(&self->segments[i]);
 
-            sync::lock::BlockingLock_lock(&segment->mutex);
+            sync::lock::BlockingLock_lock(&segment->lock);
 
             const auto* const bucketArray = (const ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
@@ -709,7 +709,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                 }
             }
 
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
         }
     }
 
@@ -738,7 +738,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
         for (usize i = 0; i < self->segmentCount; ++i) {
             auto* const segment = &self->segments[i];
 
-            sync::lock::BlockingLock_lock(&segment->mutex);
+            sync::lock::BlockingLock_lock(&segment->lock);
 
             auto* bucketArray = (ConcurrentChainHashMapBucketArray*) primitive::AtomicPtr_load((void* const*) &segment->bucketArray, primitive::RELAXED);
 
@@ -792,7 +792,7 @@ namespace Catelier::src::foundation::structure::associative::map::concurrent {
                 }
             }
 
-            sync::lock::BlockingLock_unlock(&segment->mutex);
+            sync::lock::BlockingLock_unlock(&segment->lock);
         }
 
         return anyResize;

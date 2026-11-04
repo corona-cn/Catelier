@@ -355,7 +355,7 @@ namespace Catelier::src::architecture::imp {
             u8* elements;
             usize count;
             usize capacity;
-            u64 refCount;
+            alignas(64) u64 refCount;
         } PresentElementsSpan;
 
         usize elementSize;
@@ -501,6 +501,7 @@ namespace Catelier::src::architecture::imp {
         using namespace foundation::primitive;
         using namespace foundation::concurrency;
         using namespace foundation::sync;
+        using namespace foundation::sync::lock;
 
         if (inElementSize == 0 || inElementChunkSize < 16 || inElementChunkSize > 16384 || inDiscardBufferSize < 16 || inDiscardBufferSize > 16384) {
             return nullptr;
@@ -543,12 +544,12 @@ namespace Catelier::src::architecture::imp {
         self->compactionCount = 0;
         self->lastCompactionDurationMs = 0;
 
-        if (!SpinLock_init(&self->presentElementsSpanLock)) {
+        if (!SpinLock_init(&self->presentElementsSpanLock, SpinLock_Policy::TTAS)) {
             free(self);
             return nullptr;
         }
 
-        if (!SpinLock_init(&self->sealedChunksLock)) {
+        if (!SpinLock_init(&self->sealedChunksLock, SpinLock_Policy::TTAS)) {
             SpinLock_destroy(&self->presentElementsSpanLock);
             free(self);
             return nullptr;
@@ -561,7 +562,7 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
-        if (!BlockingLock_init(&self->awaitMergingBlockingLock)) {
+        if (!BlockingLock_init(&self->awaitMergingBlockingLock, BlockingLock_Policy::PLAIN)) {
             ConflatedSignal_destroy(&self->maintenanceTrigger);
             SpinLock_destroy(&self->sealedChunksLock);
             SpinLock_destroy(&self->presentElementsSpanLock);
@@ -578,7 +579,7 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
-        if (!BlockingLock_init(&self->mergeBlockingLock)) {
+        if (!BlockingLock_init(&self->mergeBlockingLock, BlockingLock_Policy::PLAIN)) {
             ConditionalVar_destroy(&self->awaitMergingCondition);
             BlockingLock_destroy(&self->awaitMergingBlockingLock);
             ConflatedSignal_destroy(&self->maintenanceTrigger);
@@ -588,7 +589,7 @@ namespace Catelier::src::architecture::imp {
             return nullptr;
         }
 
-        if (!BlockingLock_init(&self->awaitCompactingBlockingLock)) {
+        if (!BlockingLock_init(&self->awaitCompactingBlockingLock, BlockingLock_Policy::PLAIN)) {
             BlockingLock_destroy(&self->mergeBlockingLock);
             ConditionalVar_destroy(&self->awaitMergingCondition);
             BlockingLock_destroy(&self->awaitMergingBlockingLock);
@@ -1117,13 +1118,13 @@ namespace Catelier::src::architecture::imp {
 
         auto* const span = (IMPList::PresentElementsSpan*) handle;
 
-        SpinLock_lock(&self->presentElementsSpanLock);
-
         if (Atomic64_fetchSub(&span->refCount, 1, MemoryOrder::ACQUIRE_RELEASE) == 1) {
-            IMPList_recyclePresentElementsSpan(self, span);
-        }
+            SpinLock_lock(&self->presentElementsSpanLock);
 
-        SpinLock_unlock(&self->presentElementsSpanLock);
+            IMPList_recyclePresentElementsSpan(self, span);
+
+            SpinLock_unlock(&self->presentElementsSpanLock);
+        }
     }
 
     auto IMPList_add(IMPList* const self, const void* inElement) -> bool {

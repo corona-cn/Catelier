@@ -5,7 +5,7 @@
 
 namespace Catelier::src::foundation::sync {
     typedef struct ConflatedSignal {
-        sync::lock::BlockingLock mutex;
+        sync::lock::BlockingLock lock;
         ConditionalVar condition;
         u64 waiterCount;
         bool pending;
